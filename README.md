@@ -1,4 +1,4 @@
-# blekeyboard
+# blekeyboard (alpha)
 
 `blekeyboard` is a Python package that allows you to emulate a wireless keyboard using Bluetooth Low Energy (BLE). It is inspired by the popular ESP32 library **ESP32-BLE-Keyboard** by T-vK, and aims to bring similar BLE HID keyboard functionality to Windows systems using native Bluetooth hardware.
 
