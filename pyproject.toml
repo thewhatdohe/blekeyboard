@@ -7,7 +7,6 @@ name = "blekeyboard"
 version = "0.1.0"
 authors = [
   { name="thewhatdohe" },
-  { name="stallspeed" },
 ]
 description = "A Python package to emulate a BLE Bluetooth HID keyboard over raw USB pipelines, inspired by the ESP32 library (bleKeyboard)."
 readme = "README.md"
