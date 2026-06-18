@@ -90,7 +90,7 @@ from blekeyboard.hijack import USBTransport
 from blekeyboard.emulator import BLEBroadcaster
 
 # Initialize the raw USB transport layer
-transport = USBTransport(vendor_id=0x13D3, product_id=0x3529)
+transport = USBTransport(vendor_id=0x13D3, product_id=0x3529) # Note: Remember to swap out the vendor and product id to the ones that match with zadig
 broadcaster = BLEBroadcaster(transport)
 
 try:
