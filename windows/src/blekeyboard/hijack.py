@@ -13,6 +13,7 @@ class USBTransport:
     def __init__(self, vendor_id: int = 0x13D3, product_id: int = 0x3529):
         self.vendor_id = vendor_id
         self.product_id = product_id
+        self._last_rssi = -127 # Lowest strength possible (basically off)
         self.device = None
         self._backend = self._resolve_backend()
 
@@ -41,6 +42,10 @@ class USBTransport:
             usb.util.claim_interface(self.device, 0)
         except usb.core.USBError as e:
             raise RuntimeError(f"Failed to claim interface 0. Check driver configuration. ({e})")
+        
+    def get_last_rssi(self) -> int:
+        """Returns the most recently captured raw RSSI value."""
+        return self._last_rssi
 
     def send_control_packet(self, packet: list[int]):
         """Executes a synchronous USB control transfer to endpoint 0."""
@@ -53,6 +58,22 @@ class USBTransport:
             wIndex=0,
             data_or_wLength=packet
         )
+    
+    def read_event_packet(self, timeout_ms: int = 1000) -> list[int]:
+        """Reads raw bytes from the Bluetooth controller event endpoint."""
+        if not self.device:
+            raise RuntimeError("Cannot receive: transport session is not established.")
+        try:
+            # 0x81 is the standard HCI Event interrupt endpoint
+            # 64 bytes is the standard maximum packet size for this endpoint
+            raw_data = self.device.read(0x81, 64, timeout=timeout_ms)
+            return list(raw_data)
+        except usb.core.USBError as e:
+            # USB timeout (error code 11 or 'timed out') is normal when no data is ready
+            if e.errno == 11 or "timed out" in str(e).lower():
+                return []
+            raise e
+
 
     def release(self):
         """Releases the active interface and closes the session."""
