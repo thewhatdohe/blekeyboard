@@ -6,7 +6,9 @@ See [`../windows`](../windows) for the Windows implementation. The HCI packet co
 
 ## Project status
 
-Alpha, and currently ahead of the Windows implementation. Verified against real hardware: the controller is claimed, reset and configured, advertises a discoverable name, accepts an incoming connection, and serves a GATT attribute table that a client can discover and read. The pairing and HID layers are in development, so a connected device cannot yet receive keystrokes. See the [project roadmap](../README.md#roadmap).
+Alpha, and currently ahead of the Windows implementation. Verified against real hardware: the controller is claimed, reset and configured, advertises a discoverable name, accepts an incoming connection, serves a GATT attribute table that a client can discover and read, and pairs with the peer to encrypt the link. The HID layer is in development, so a connected device cannot yet receive keystrokes.
+
+Pairing implements LE Legacy with the Just Works association model, the only one available to a device with no display and no keypad. It leaves an established session safe from passive eavesdropping but offers no protection against an attacker present during pairing. Keys are not retained, so each connection pairs again. AES is performed by the controller through the LE Encrypt command, which is what allows the implementation to stay free of a cryptography dependency. See the [project roadmap](../README.md#roadmap).
 
 ## How it works
 
@@ -110,6 +112,11 @@ finally:
 | `BLEBroadcaster.set_event_mask()` | Enables LE Meta event delivery, without which connection events are withheld. |
 | `BLEBroadcaster.set_le_event_mask()` | Selects the LE subevents the controller reports. |
 | `BLEBroadcaster.read_le_buffer_size()` | Queries the controller's ACL payload size and buffer count. |
+| `BLEBroadcaster.read_bd_addr()` | Reads the controller's own public address, which pairing mixes into the confirm value. |
+| `BLEBroadcaster.le_encrypt(key, plaintext)` | Runs one AES-128 block through the controller's engine. |
+| `BLEBroadcaster.le_rand()` | Requests eight random octets from the controller. |
+| `BLEBroadcaster.le_long_term_key_request_reply(handle, key)` | Supplies the key that encrypts a link. |
+| `BLEBroadcaster.le_long_term_key_request_negative_reply(handle)` | Declines to supply a key, aborting encryption. |
 | `BLEBroadcaster.configure_advertising(interval_ms)` | Sets advertising parameters. Accepts 20 ms to 10240 ms. |
 | `BLEBroadcaster.set_advertising_payload(name)` | Sets advertising data to flags and the complete local name, up to 26 bytes. |
 | `BLEBroadcaster.set_state(enable)` | Enables or disables advertising. |

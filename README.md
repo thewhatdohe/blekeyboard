@@ -16,10 +16,13 @@ Alpha. The BLE advertising layer is implemented and verified against real hardwa
 | Connection lifecycle events | Planned | Supported |
 | L2CAP data transport | Planned | Supported |
 | GATT server | Planned | Supported |
-| Pairing and bonding | Planned | Planned |
+| Pairing and link encryption | Planned | Supported |
+| Persistent bonding | Planned | Planned |
 | HID keyboard input | Planned | Planned |
 
-Linux development is currently ahead of Windows. A connecting device is accepted and can discover the peripheral's services, but because the pairing and HID layers are not yet present it cannot receive keystrokes.
+Linux development is currently ahead of Windows. A connecting device is accepted, can discover the peripheral's services, and can pair to encrypt the link. The HID layer is not yet present, so it cannot receive keystrokes.
+
+Pairing uses the Just Works association model, which is all a device with no display and no keypad can offer. It protects an established session from passive eavesdropping but not from an attacker present during pairing itself. Keys are not retained, so each connection pairs afresh.
 
 ## Roadmap
 
@@ -28,7 +31,7 @@ HID over GATT requires a host-side protocol stack above the HCI layer:
 - [x] Connection lifecycle handling (HCI event mask, connection and disconnection events)
 - [x] ACL data transport with L2CAP fragmentation and reassembly
 - [x] ATT protocol and a GATT attribute server
-- [ ] Security Manager pairing and link encryption, which HID hosts require before accepting input
+- [x] Security Manager pairing and link encryption, which HID hosts require before accepting input
 - [ ] HID over GATT Profile services and report descriptors
 - [ ] Key report transmission
 
