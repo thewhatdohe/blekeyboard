@@ -6,7 +6,7 @@ See [`../windows`](../windows) for the Windows implementation. The HCI packet co
 
 ## Project status
 
-Alpha. Advertising is implemented and verified against real hardware: the controller is claimed, reset, configured, and broadcasts a discoverable device name. The GATT, pairing, and HID layers are in development, so a connecting device will find no services and cannot receive keystrokes. See the [project roadmap](../README.md#roadmap).
+Alpha, and currently ahead of the Windows implementation. Verified against real hardware: the controller is claimed, reset and configured, advertises a discoverable name, accepts an incoming connection, and reassembles the L2CAP frames the peer sends. The GATT, pairing and HID layers are in development, so a connecting device will find no services and cannot receive keystrokes. See the [project roadmap](../README.md#roadmap).
 
 ## How it works
 
@@ -101,9 +101,15 @@ finally:
 | --- | --- |
 | `HCITransport.connect()` | Claims the adapter's HCI user channel. |
 | `HCITransport.send_control_packet(packet)` | Writes an HCI command packet to the controller. |
-| `HCITransport.read_event_packet(timeout_ms)` | Reads an HCI event packet, returning an empty list on timeout. |
+| `HCITransport.send_acl_payload(handle, payload)` | Writes a payload to a connection, fragmenting it to the controller's ACL capacity. |
+| `HCITransport.read_packet(timeout_ms)` | Reads one HCI packet of any type, returning an empty list on timeout. |
+| `HCITransport.configure_acl_buffers(payload_length, total_packets)` | Adopts the ACL capacity reported by the controller. |
+| `HCITransport.credit_acl_packets(count)` | Returns buffer slots released by a Number Of Completed Packets event. |
 | `HCITransport.release()` | Closes the socket and returns the adapter to the kernel. |
 | `BLEBroadcaster.reset_controller()` | Issues HCI Reset. Required after claiming the adapter. |
+| `BLEBroadcaster.set_event_mask()` | Enables LE Meta event delivery, without which connection events are withheld. |
+| `BLEBroadcaster.set_le_event_mask()` | Selects the LE subevents the controller reports. |
+| `BLEBroadcaster.read_le_buffer_size()` | Queries the controller's ACL payload size and buffer count. |
 | `BLEBroadcaster.configure_advertising(interval_ms)` | Sets advertising parameters. Accepts 20 ms to 10240 ms. |
 | `BLEBroadcaster.set_advertising_payload(name)` | Sets advertising data to flags and the complete local name, up to 26 bytes. |
 | `BLEBroadcaster.set_state(enable)` | Enables or disables advertising. |

@@ -31,6 +31,16 @@ LE_ENHANCED_CONNECTION_COMPLETE = 0x0A
 ROLE_CENTRAL = 0x00
 ROLE_PERIPHERAL = 0x01
 
+# Packet boundary flags in an ACL header. LE links carry only the
+# non-flushable forms, so a payload starts with FIRST and any further
+# fragments of the same payload use CONTINUING.
+ACL_PB_FIRST = 0x00
+ACL_PB_CONTINUING = 0x01
+
+# The smallest LE ACL payload every controller must accept. Used until the
+# controller reports its real capacity.
+LE_MIN_ACL_PAYLOAD = 27
+
 
 @dataclass
 class CommandComplete:
@@ -80,6 +90,13 @@ class NumberOfCompletedPackets:
     counts: list[tuple[int, int]] = field(default_factory=list)
 
 
+@dataclass
+class ACLData:
+    handle: int
+    packet_boundary: int
+    data: bytes
+
+
 def format_address(octets) -> str:
     """Formats a little-endian 6-octet link layer address as a MAC string."""
     return ":".join(f"{b:02X}" for b in reversed(bytes(octets)))
@@ -88,6 +105,79 @@ def format_address(octets) -> str:
 def _u16(data, offset: int) -> int:
     """Reads a little-endian 16-bit value at the given offset."""
     return data[offset] | (data[offset + 1] << 8)
+
+
+def parse_acl(packet):
+    """
+    Decodes one raw HCI ACL data packet.
+
+    Returns None for packets that are not ACL data or whose declared payload
+    length does not match what arrived.
+    """
+    data = bytes(packet)
+
+    # H4 indicator, a combined handle and flags field, the payload length,
+    # and then the payload itself.
+    if len(data) < 5 or data[0] != HCI_ACLDATA_PKT:
+        return None
+
+    handle_flags = _u16(data, 1)
+    length = _u16(data, 3)
+    payload = data[5:]
+
+    if len(payload) != length:
+        return None
+
+    # The handle occupies the low 12 bits; the boundary and broadcast flags
+    # sit above it.
+    return ACLData(
+        handle=handle_flags & 0x0FFF,
+        packet_boundary=(handle_flags >> 12) & 0x03,
+        data=payload,
+    )
+
+
+def build_acl(handle: int, packet_boundary: int, payload: bytes) -> bytes:
+    """Frames a payload as an HCI ACL data packet ready for the transport."""
+    handle_flags = (handle & 0x0FFF) | ((packet_boundary & 0x03) << 12)
+    return bytes([HCI_ACLDATA_PKT]) + \
+        handle_flags.to_bytes(2, "little") + \
+        len(payload).to_bytes(2, "little") + \
+        bytes(payload)
+
+
+def fragment_payload(payload: bytes, max_fragment: int) -> list[tuple[int, bytes]]:
+    """
+    Splits a payload into ACL-sized fragments paired with their boundary flag.
+
+    An empty payload still yields one fragment, since a zero length ACL packet
+    is how an empty L2CAP frame is carried.
+    """
+    if max_fragment < 1:
+        raise ValueError("Maximum fragment size must be at least one byte.")
+
+    if not payload:
+        return [(ACL_PB_FIRST, b"")]
+
+    fragments = []
+    for offset in range(0, len(payload), max_fragment):
+        boundary = ACL_PB_FIRST if offset == 0 else ACL_PB_CONTINUING
+        fragments.append((boundary, payload[offset:offset + max_fragment]))
+    return fragments
+
+
+def parse_le_buffer_size(parameters: bytes):
+    """
+    Reads the LE ACL payload capacity from an LE Read Buffer Size response.
+
+    Returns a (payload_length, total_packets) pair, or None if the controller
+    reported failure or a truncated response. A payload length of zero means
+    the controller shares its BR/EDR buffers and the caller should fall back
+    to the legacy Read Buffer Size command.
+    """
+    if len(parameters) < 4 or parameters[0] != 0x00:
+        return None
+    return _u16(parameters, 1), parameters[3]
 
 
 def parse_event(packet):

@@ -83,6 +83,14 @@ class BLEBroadcaster:
         )
         self.transport.send_control_packet(packet)
 
+    def read_le_buffer_size(self):
+        """Asks the controller how much outbound ACL data it can hold."""
+        # The reply gives the maximum LE ACL payload and how many such packets
+        # the controller can buffer, which together govern fragmentation and
+        # flow control. OCF 0x0002 under the LE group.
+        packet = self._build_hci_packet(ocf=0x0002, ogf=self.OGF_LE_CONTROLLER, data=[])
+        self.transport.send_control_packet(packet)
+
     def configure_advertising(self, interval_ms: int = 800):
         """Initializes standard ADV_IND Link Layer parameters."""
         # BLE radio timing is measured in "slots" of 0.625 milliseconds.
