@@ -1,146 +1,127 @@
-# blekeyboard (alpha)
+# blekeyboard (Windows)
 
-`blekeyboard` is a Python package that talks raw HCI commands directly to a local Bluetooth controller. It is inspired by the popular ESP32 library **ESP32-BLE-Keyboard** by T-vK, and aims to bring similar BLE HID keyboard functionality to Windows systems using native Bluetooth hardware.
+Windows implementation of `blekeyboard`, using a generic WinUSB driver and `libusb` to obtain raw access to a local Bluetooth controller.
 
-By leveraging the system’s Bluetooth controller in a compatible mode, `blekeyboard` drives BLE from Python without requiring external hardware such as an ESP32 or USB HID injection devices.
+See [`../linux`](../linux) for the Linux implementation. The HCI packet construction layer (`emulator.py`) is common to both platforms; only the transport layer (`hijack.py`) differs.
 
-This is the Windows implementation. See [`../linux`](../linux) for the native Linux port. The BLE/HCI packet-building logic (`emulator.py`) is identical between the two — only the low-level transport differs.
+## Project status
 
----
+Alpha. Advertising is implemented: the controller is claimed, reset, configured, and broadcasts a discoverable device name. The GATT, pairing, and HID layers are in development, so a connecting device will find no services and cannot receive keystrokes. See the [project roadmap](../README.md#roadmap).
 
-## ⚠️ Status
+Tested on Windows 10.
 
-- **Advertising works**: the controller is claimed, reset, configured, and broadcasts a discoverable device name.
-- **HID is not implemented yet.** There is no GATT server, HID service, or connection handling, so a device that connects will find no services and cannot receive keystrokes.
-- Tested only on **Windows 10**
-- Functionality is **experimental and unstable**
-- Results may vary depending on Bluetooth chipset and driver support
-- Some systems may not support BLE peripheral emulation properly
+## How it works
 
----
+Windows does not permit applications to act as BLE peripherals or to reach the controller's HID capabilities directly. Replacing the vendor driver with a generic USB driver exposes the adapter's HCI endpoints, allowing BLE configuration to be driven from Python.
 
-## Technical Overview
+Peripheral support is dependent on hardware and driver capability and is not available on all systems.
 
-Modern desktop operating systems typically restrict applications from acting as BLE peripheral devices or exposing low-level Bluetooth HID capabilities directly.
+## Requirements
 
-`blekeyboard` works by using a generic USB driver layer to access the Bluetooth adapter in a mode that allows direct communication with the controller. This enables BLE advertising configuration from Python; connection handling and HID keyboard emulation are planned but not yet implemented.
+- Python 3.10 or later
+- A Bluetooth Low Energy 4.2 or later controller
 
-> Note: BLE peripheral support is hardware and driver dependent, and may not be available on all systems.
+Primarily tested against Realtek (RTL88xx) and Intel (AX2xx) adapters, which cover most modern laptop chipsets.
 
----
+## Installation
 
-## Prerequisites & Installation
+### 1. Replace the adapter driver
 
-### 1. Hardware Compatibility
+The library cannot reach the controller until the vendor driver is replaced with WinUSB. This suspends normal Bluetooth functionality, including connected peripherals such as mice and headsets, until the original driver is restored.
 
-Requires a Bluetooth Low Energy (BLE 4.2+) controller.
+1. Download [Zadig](https://zadig.akeo.ie/).
+2. Enable **Options → List All Devices**.
+3. Select the Bluetooth adapter, for example *Realtek Bluetooth Adapter*.
+4. Confirm the device identifiers, for example `13D3:3529`.
+5. Select the **WinUSB** driver.
+6. Select **Replace Driver**.
+7. Reboot.
 
-This package is primarily tested on:
-
-- Realtek (RTL88xx) Bluetooth adapters  
-- Intel (AX2xx) Bluetooth adapters  
-
-These represent most modern laptop Bluetooth chipsets.
-
----
-
-### 2. Low-Level Hardware Mapping (Windows Setup)
-
-⚠️ **This step is required for the library to function correctly.**
-
-You must replace the default Windows Bluetooth driver with a generic USB driver using Zadig.
-
-> This will temporarily disable normal Bluetooth functionality (mouse, headphones, etc.) until reverted.
-
-#### Steps:
-
-1. Download **Zadig**: https://zadig.akeo.ie/
-2. Open Zadig and enable:
-   - `Options → List All Devices`
-3. Select your **Bluetooth adapter** (e.g., Realtek Bluetooth Adapter)
-4. Verify device IDs (example: `13D3:3529`)
-5. Select driver:
-   - **WinUSB**
-6. Click **Replace Driver**
-7. Reboot your system
-
----
-
-### 3. Package Installation
-
-Install locally:
+### 2. Install the package
 
 ```powershell
 pip install -e .
 ```
-Ensure `libusb-1.0.dll` is available in your working directory to support USB communication in restricted environments.
 
-### Note
-`libusb-1.0.dll` is x64, further updates to this package will expand to different system architectures.
+`libusb-1.0.dll` must be present in the working directory to support USB communication in restricted environments. The bundled binary is x64; additional architectures are planned.
 
 ## Usage
-### CLI Execution
 
-Run the BLE advertising service:
+### Command line
+
 ```powershell
 python -m blekeyboard
 ```
 
-### Programmatic API
+Starts the advertising service and holds the adapter until interrupted with `Ctrl+C`.
+
+### Library
 
 ```python
 import time
-from blekeyboard.hijack import USBTransport
-from blekeyboard.emulator import BLEBroadcaster
 
-# Initialize the raw USB transport layer
-transport = USBTransport(vendor_id=0x13D3, product_id=0x3529) # Note: Remember to swap out the vendor and product id to the ones that match with zadig
+from blekeyboard.emulator import BLEBroadcaster
+from blekeyboard.hijack import USBTransport
+
+# Replace the identifiers with those shown for the adapter in Zadig.
+transport = USBTransport(vendor_id=0x13D3, product_id=0x3529)
 broadcaster = BLEBroadcaster(transport)
 
 try:
-    # Bind hardware and initialize low-level controller
+    # Claim the USB interface and bind to the controller.
     transport.connect()
 
-    # A freshly claimed controller is uninitialized, so reset it first
+    # A newly claimed controller is uninitialised and must be reset first.
     broadcaster.reset_controller()
 
     broadcaster.configure_advertising(interval_ms=400)
-    
-    # Define the advertised device namespace
     broadcaster.set_advertising_payload("BLE-Ducky")
-    
-    # Fire up the transmitter
     broadcaster.set_state(enable=True)
-    print("[INFO] Peripheral advertising sequence live.")
-    
-    # Maintain active link state to prevent firmware watchdog sleep
+
+    # Periodic informational queries keep the controller from idling.
     while True:
         time.sleep(10)
         broadcaster.send_keepalive_ping()
 
 finally:
-    # Graceful hardware release sequence
     broadcaster.set_state(enable=False)
     transport.release()
 ```
 
-## Environment Recovery (Restoring Normal Bluetooth)
+### API reference
 
-To hand hardware control back to the Windows OS kernel and re-enable normal desktop Bluetooth:
+| Method | Description |
+| --- | --- |
+| `USBTransport.connect()` | Locates the adapter and claims interface 0. |
+| `USBTransport.send_control_packet(packet)` | Writes an HCI command packet to the controller. |
+| `USBTransport.read_event_packet(timeout_ms)` | Reads an HCI event packet, returning an empty list on timeout. |
+| `USBTransport.release()` | Releases the interface and closes the session. |
+| `BLEBroadcaster.reset_controller()` | Issues HCI Reset. Required after claiming the adapter. |
+| `BLEBroadcaster.configure_advertising(interval_ms)` | Sets advertising parameters. Accepts 20 ms to 10240 ms. |
+| `BLEBroadcaster.set_advertising_payload(name)` | Sets advertising data to flags and the complete local name, up to 26 bytes. |
+| `BLEBroadcaster.set_state(enable)` | Enables or disables advertising. |
+| `BLEBroadcaster.send_keepalive_ping()` | Reads local version information as a controller liveness check. |
+
+## Restoring normal Bluetooth operation
+
+To return control of the adapter to Windows:
 
 1. Open **Device Manager**.
-2. Expand **Universal Serial Bus devices** all the way at the bottom.
-3. Right-click your Bluetooth adapter.
-4. Select **Update driver**.
-5. Choose:
-- Browse my computer for drivers
-- Let me pick from a list of available drivers
-6. Select the original vendor driver (e.g., Realtek Bluetooth Adapter).
-7. Reboot your system
-8. Windows should spin up your normal desktop Bluetooth functionality again.
+2. Expand **Universal Serial Bus devices**.
+3. Right-click the Bluetooth adapter and select **Update driver**.
+4. Select **Browse my computer for drivers**, then **Let me pick from a list of available drivers**.
+5. Select the original vendor driver, for example *Realtek Bluetooth Adapter*.
+6. Reboot.
+
+Normal desktop Bluetooth functionality resumes after restart.
+
+## Testing
+
+```powershell
+pip install -e ".[dev]"
+pytest
+```
 
 ## Disclaimer
 
-This project is intended for educational and **experimental (for now)** use only.
-
-BLE keyboard behavior is highly dependent on hardware and driver support, and may not function consistently across all devices or operating system configurations.
+This project is intended for educational and experimental use. Behaviour depends heavily on controller and driver support and may vary across hardware and operating system configurations.
