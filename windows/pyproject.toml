@@ -8,7 +8,7 @@ version = "0.1.0"
 authors = [
   { name="thewhatdohe" },
 ]
-description = "A Python package to emulate a BLE Bluetooth HID keyboard over raw USB pipelines, inspired by the ESP32 library (bleKeyboard)."
+description = "A Python package that drives a local Bluetooth controller over raw USB pipelines to advertise as a BLE peripheral, working toward HID keyboard emulation. Inspired by the ESP32 library (bleKeyboard)."
 readme = "README.md"
 requires-python = ">=3.10"
 classifiers = [

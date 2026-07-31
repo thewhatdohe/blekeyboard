@@ -1,6 +1,6 @@
 # blekeyboard (Linux, alpha)
 
-`blekeyboard` is a Python package that allows you to emulate a wireless keyboard using Bluetooth Low Energy (BLE). It is inspired by the popular ESP32 library **ESP32-BLE-Keyboard** by T-vK, and aims to bring similar BLE HID keyboard functionality to Linux systems using native Bluetooth hardware.
+`blekeyboard` is a Python package that talks raw HCI commands directly to a local Bluetooth controller. It is inspired by the popular ESP32 library **ESP32-BLE-Keyboard** by T-vK, and aims to bring similar BLE HID keyboard functionality to Linux systems using native Bluetooth hardware.
 
 This is the Linux port of `blekeyboard`. See [`../windows`](../windows) for the original Windows implementation. The BLE/HCI packet-building logic (`emulator.py`) is identical between the two — only the low-level transport differs.
 
@@ -8,6 +8,8 @@ This is the Linux port of `blekeyboard`. See [`../windows`](../windows) for the 
 
 ## ⚠️ Status
 
+- **Advertising works** and is verified on real hardware: the controller is claimed, reset, configured, and broadcasts a device name that nearby devices can discover.
+- **HID is not implemented yet.** There is no GATT server, HID service, or connection handling, so a device that connects will find no services and cannot receive keystrokes.
 - Experimental and unstable
 - Requires a Bluetooth controller exposed via BlueZ (`hciN`)
 - Results may vary depending on Bluetooth chipset and driver support
@@ -26,7 +28,7 @@ This means `blekeyboard` on Linux has **no external dependencies** — it talks 
 
 ### 1. Hardware Compatibility
 
-Requires a Bluetooth Low Energy (BLE 4.2+) controller recognized by BlueZ (visible via `hciconfig` / `bluetoothctl` as `hci0`, `hci1`, etc.).
+Requires a Bluetooth Low Energy (BLE 4.2+) controller recognized by BlueZ (visible via `bluetoothctl list` or `btmgmt info` as `hci0`, `hci1`, etc.).
 
 ### 2. Bring the adapter down
 
@@ -35,10 +37,12 @@ Requires a Bluetooth Low Energy (BLE 4.2+) controller recognized by BlueZ (visib
 The HCI user channel requires the target adapter to be down before it can be claimed:
 
 ```bash
-sudo hciconfig hci0 down
+sudo btmgmt --index 0 power off
 ```
 
 > This will temporarily disable normal Bluetooth functionality (mouse, headphones, etc.) on that adapter until it's brought back up.
+
+> Older guides use `sudo hciconfig hci0 down`. The deprecated `hciconfig` and `hcitool` utilities have been removed from current BlueZ releases, so use `btmgmt` (or `bluetoothctl power off`) instead.
 
 ### 3. Permissions
 
@@ -66,7 +70,7 @@ pip install -e .
 
 ### CLI Execution
 
-Run the BLE keyboard service (as root, or with `CAP_NET_ADMIN` granted):
+Run the BLE advertising service (as root, or with `CAP_NET_ADMIN` granted):
 
 ```bash
 sudo python -m blekeyboard
@@ -86,6 +90,10 @@ broadcaster = BLEBroadcaster(transport)
 try:
     # Claim the adapter's HCI user channel
     transport.connect()
+
+    # A freshly claimed controller is uninitialized, so reset it first
+    broadcaster.reset_controller()
+
     broadcaster.configure_advertising(interval_ms=400)
 
     # Define the advertised device namespace
@@ -111,7 +119,7 @@ finally:
 Closing the transport (`transport.release()`) releases the user channel automatically. To fully hand the adapter back to BlueZ:
 
 ```bash
-sudo hciconfig hci0 up
+sudo btmgmt --index 0 power on
 ```
 
 Normal desktop Bluetooth functionality should resume immediately — no reboot required.
