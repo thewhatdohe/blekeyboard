@@ -1,17 +1,21 @@
 # blekeyboard (alpha)
 
-`blekeyboard` is a Python package that allows you to emulate a wireless keyboard using Bluetooth Low Energy (BLE). It is inspired by the popular ESP32 library **ESP32-BLE-Keyboard** by T-vK, and aims to bring similar BLE HID keyboard functionality to Windows systems using native Bluetooth hardware.
+`blekeyboard` is a Python package that talks raw HCI commands directly to a local Bluetooth controller. It is inspired by the popular ESP32 library **ESP32-BLE-Keyboard** by T-vK, and aims to bring similar BLE HID keyboard functionality to Windows systems using native Bluetooth hardware.
 
-By leveraging the system’s Bluetooth controller in a compatible mode, `blekeyboard` enables Python-based BLE keyboard emulation without requiring external hardware such as an ESP32 or USB HID injection devices.
+By leveraging the system’s Bluetooth controller in a compatible mode, `blekeyboard` drives BLE from Python without requiring external hardware such as an ESP32 or USB HID injection devices.
+
+This is the Windows implementation. See [`../linux`](../linux) for the native Linux port. The BLE/HCI packet-building logic (`emulator.py`) is identical between the two — only the low-level transport differs.
 
 ---
 
 ## ⚠️ Status
 
+- **Advertising works**: the controller is claimed, reset, configured, and broadcasts a discoverable device name.
+- **HID is not implemented yet.** There is no GATT server, HID service, or connection handling, so a device that connects will find no services and cannot receive keystrokes.
 - Tested only on **Windows 10**
 - Functionality is **experimental and unstable**
 - Results may vary depending on Bluetooth chipset and driver support
-- Some systems may not support BLE peripheral/HID emulation properly
+- Some systems may not support BLE peripheral emulation properly
 
 ---
 
@@ -19,7 +23,7 @@ By leveraging the system’s Bluetooth controller in a compatible mode, `blekeyb
 
 Modern desktop operating systems typically restrict applications from acting as BLE peripheral devices or exposing low-level Bluetooth HID capabilities directly.
 
-`blekeyboard` works by using a generic USB driver layer to access the Bluetooth adapter in a mode that allows direct communication with the controller. This enables BLE advertising configuration, connection handling, and HID keyboard emulation from Python.
+`blekeyboard` works by using a generic USB driver layer to access the Bluetooth adapter in a mode that allows direct communication with the controller. This enables BLE advertising configuration from Python; connection handling and HID keyboard emulation are planned but not yet implemented.
 
 > Note: BLE peripheral support is hardware and driver dependent, and may not be available on all systems.
 
@@ -77,7 +81,7 @@ Ensure `libusb-1.0.dll` is available in your working directory to support USB co
 ## Usage
 ### CLI Execution
 
-Run the BLE keyboard service:
+Run the BLE advertising service:
 ```powershell
 python -m blekeyboard
 ```
@@ -96,6 +100,10 @@ broadcaster = BLEBroadcaster(transport)
 try:
     # Bind hardware and initialize low-level controller
     transport.connect()
+
+    # A freshly claimed controller is uninitialized, so reset it first
+    broadcaster.reset_controller()
+
     broadcaster.configure_advertising(interval_ms=400)
     
     # Define the advertised device namespace
