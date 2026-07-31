@@ -1,5 +1,4 @@
 import os
-import sys
 import usb.core
 import usb.util
 import usb.backend.libusb1
@@ -13,7 +12,6 @@ class USBTransport:
     def __init__(self, vendor_id: int = 0x13D3, product_id: int = 0x3529):
         self.vendor_id = vendor_id
         self.product_id = product_id
-        self._last_rssi = -127 # Lowest strength possible (basically off)
         self.device = None
         self._backend = self._resolve_backend()
 
@@ -43,10 +41,6 @@ class USBTransport:
         except usb.core.USBError as e:
             raise RuntimeError(f"Failed to claim interface 0. Check driver configuration. ({e})")
         
-    def get_last_rssi(self) -> int:
-        """Returns the most recently captured raw RSSI value."""
-        return self._last_rssi
-
     def send_control_packet(self, packet: list[int]):
         """Executes a synchronous USB control transfer to endpoint 0."""
         if not self.device:
@@ -82,3 +76,4 @@ class USBTransport:
                 usb.util.release_interface(self.device, 0)
             except usb.core.USBError:
                 pass
+            self.device = None
