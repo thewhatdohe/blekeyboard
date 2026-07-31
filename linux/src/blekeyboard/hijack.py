@@ -1,13 +1,15 @@
 import socket
 
+from blekeyboard.hci import HCI_ACLDATA_PKT, HCI_COMMAND_PKT, HCI_EVENT_PKT
+
 # BlueZ HCI user channel: hands a controller over for exclusive raw HCI
 # access, bypassing bluetoothd/the kernel Bluetooth stack. This is the
 # native Linux equivalent of swapping the Windows driver to WinUSB.
 HCI_CHANNEL_USER = 1
 
-# H4 UART framing packet type indicators used on raw HCI sockets.
-HCI_COMMAND_PKT = 0x01
-HCI_EVENT_PKT = 0x04
+# Large enough for any LE packet the controller can hand back, including an
+# ACL payload extended to the 251-octet maximum plus its framing.
+_RECV_BUFFER_SIZE = 4096
 
 
 class HCITransport:
@@ -40,12 +42,12 @@ class HCITransport:
         self.sock.send(bytes([HCI_COMMAND_PKT] + packet))
 
     def read_event_packet(self, timeout_ms: int = 1000) -> list[int]:
-        """Reads a raw HCI event packet from the controller."""
+        """Reads one raw HCI packet from the controller."""
         if not self.sock:
             raise RuntimeError("Cannot receive: transport session is not established.")
         self.sock.settimeout(timeout_ms / 1000)
         try:
-            raw_data = self.sock.recv(255)
+            raw_data = self.sock.recv(_RECV_BUFFER_SIZE)
         except OSError as e:
             # Socket timeout (no data ready) is normal and not an error.
             if isinstance(e, TimeoutError) or "timed out" in str(e).lower():
