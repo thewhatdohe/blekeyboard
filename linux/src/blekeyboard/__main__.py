@@ -14,7 +14,9 @@ from blekeyboard.hci import (
     parse_le_buffer_size,
 )
 from blekeyboard.hijack import HCITransport
-from blekeyboard.l2cap import L2CAPReassembler
+from blekeyboard.l2cap import CID_ATT, L2CAPReassembler, build_frame
+from blekeyboard.gatt import GattServer
+from blekeyboard.profile import build_database
 
 DEVICE_NAME = "BLE-Ducky"
 KEEPALIVE_INTERVAL_SECONDS = 10.0
@@ -27,7 +29,8 @@ def main():
     # Target hardware device context: local Bluetooth adapter hci0.
     transport = HCITransport(dev_id=0)
     broadcaster = BLEBroadcaster(transport)
-    session = _Session(transport, broadcaster)
+    server = GattServer(build_database(DEVICE_NAME))
+    session = _Session(transport, broadcaster, server)
     exit_code = 0
 
     try:
@@ -89,9 +92,10 @@ def main():
 class _Session:
     """Tracks live connections and the L2CAP traffic arriving on them."""
 
-    def __init__(self, transport, broadcaster):
+    def __init__(self, transport, broadcaster, server):
         self._transport = transport
         self._broadcaster = broadcaster
+        self._server = server
         self._peers = {}
         self._reassemblers = {}
 
@@ -160,12 +164,28 @@ class _Session:
             return
 
         for frame in reassembler.feed(acl.packet_boundary, acl.data):
-            preview = " ".join(f"{b:02X}" for b in frame.payload[:8])
-            if len(frame.payload) > 8:
-                preview += " ..."
-            print(
-                f"  {frame.channel_name}: {len(frame.payload)} byte(s) [{preview}]"
-            )
+            if frame.cid == CID_ATT:
+                self._handle_att(acl.handle, frame.payload)
+            else:
+                print(f"  {frame.channel_name}: {_describe(frame.payload)} (unhandled)")
+
+    def _handle_att(self, handle, pdu):
+        response = self._server.handle_pdu(pdu)
+        print(f"  ATT <- {_describe(pdu)}")
+
+        if response is None:
+            return
+
+        print(f"  ATT -> {_describe(response)}")
+        self._transport.send_acl_payload(handle, build_frame(CID_ATT, response))
+
+
+def _describe(payload: bytes, limit: int = 12) -> str:
+    """Renders a PDU as hex, truncated so log lines stay readable."""
+    shown = " ".join(f"{b:02X}" for b in payload[:limit])
+    if len(payload) > limit:
+        shown += " ..."
+    return f"{len(payload)}B [{shown}]"
 
 
 if __name__ == "__main__":
