@@ -1,30 +1,55 @@
-# blekeyboard (alpha)
+# blekeyboard
 
-`blekeyboard` is a Python package that talks raw HCI commands directly to a local Bluetooth controller, with the goal of emulating a wireless keyboard over Bluetooth Low Energy (BLE). It is inspired by the popular ESP32 library **ESP32-BLE-Keyboard** by T-vK.
+A Python library for driving a local Bluetooth controller directly through raw HCI commands, targeting Bluetooth Low Energy (BLE) HID keyboard emulation without external hardware such as an ESP32 or a USB HID injection device.
 
-## ⚠️ Status
+Inspired by the ESP32 library [ESP32-BLE-Keyboard](https://github.com/T-vK/ESP32-BLE-Keyboard) by T-vK.
 
-What works today is the **advertising layer**: claiming the controller, resetting it, configuring advertising parameters, broadcasting a device name, and holding the link open with keepalives.
+## Project status
 
-**HID is not implemented yet.** There is no GATT server, no HID service, no HID report descriptor, and no connection handling. A phone or laptop scanning nearby will see the advertised name and can attempt to connect, but it will not find any services and cannot receive keystrokes. Despite the project name, this is currently a BLE *advertiser*, not a BLE HID peripheral.
+Alpha. The BLE advertising layer is implemented and verified against real hardware. HID input support is in development; see [Roadmap](#roadmap).
 
-| | Windows | Linux |
+| Capability | Windows | Linux |
 | --- | --- | --- |
-| Raw HCI transport | ✅ | ✅ |
-| Advertising | ✅ | ✅ |
-| HID keyboard | ❌ planned | ❌ planned |
+| Raw HCI transport | Supported | Supported |
+| Controller reset and configuration | Supported | Supported |
+| Connectable advertising | Supported | Supported |
+| GATT server | Planned | Planned |
+| Pairing and bonding | Planned | Planned |
+| HID keyboard input | Planned | Planned |
 
-## Platforms
+A device scanning nearby will discover the advertised peripheral. Because the GATT and HID layers are not yet present, a connecting device will find no services and cannot receive keystrokes.
 
-This repository is split by platform, since each requires a different low-level transport to get raw HCI access to the Bluetooth controller:
+## Roadmap
 
-- [`windows/`](windows) — the original implementation. Uses Zadig/WinUSB + `libusb` to bypass the Windows Bluetooth stack. Tested on Windows 10.
-- [`linux/`](linux) — a native port. Uses BlueZ's HCI user channel (`AF_BLUETOOTH` raw sockets) — no external drivers or dependencies required. Advertising verified on real hardware.
+HID over GATT requires a host-side protocol stack above the current HCI layer:
 
-The core BLE/HCI packet-building logic (`emulator.py`, the `BLEBroadcaster` class) is identical across both — only the transport layer (`hijack.py`) differs. See each platform folder's README for setup and usage instructions.
+1. Connection lifecycle handling (HCI event mask, connection and disconnection events)
+2. ACL data transport with L2CAP fragmentation and reassembly
+3. ATT protocol and a GATT attribute server
+4. Security Manager pairing and link encryption, which HID hosts require before accepting input
+5. HID over GATT Profile services and report descriptors
+6. Key report transmission
+
+## Repository layout
+
+The project is split by platform, as each requires a different transport to obtain raw HCI access to the controller:
+
+| Directory | Transport | Notes |
+| --- | --- | --- |
+| [`windows/`](windows) | Zadig/WinUSB with `libusb` | Bypasses the Windows Bluetooth stack. Tested on Windows 10. |
+| [`linux/`](linux) | BlueZ HCI user channel (`AF_BLUETOOTH` raw sockets) | No external drivers or runtime dependencies. |
+
+The HCI packet construction layer (`emulator.py`, class `BLEBroadcaster`) is common to both platforms; only the transport layer (`hijack.py`) differs. Refer to each platform directory for setup and usage instructions.
+
+## Requirements
+
+- Python 3.10 or later
+- A Bluetooth Low Energy 4.2 or later controller
 
 ## Disclaimer
 
-This project is intended for educational and **experimental (for now)** use only.
+This project is intended for educational and experimental use. Behaviour depends heavily on controller and driver support and may vary across hardware and operating system configurations.
 
-BLE behavior is highly dependent on hardware and driver support, and may not function consistently across all devices or operating system configurations.
+## License
+
+Released under the MIT License. See [LICENSE](LICENSE).
