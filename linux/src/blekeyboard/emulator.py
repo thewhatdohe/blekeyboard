@@ -16,6 +16,21 @@ class BLEBroadcaster:
     # 0x03 covers controller and baseband control, such as resetting the chip.
     OGF_CONTROLLER_BASEBAND = 0x03
 
+    # The controller's power-on event mask, which the spec defines as
+    # 0x00001FFFFFFFFFFF. Notably it leaves LE Meta Event (bit 61) disabled,
+    # so LE connection events are not delivered until we enable it.
+    _DEFAULT_EVENT_MASK = 0x00001FFFFFFFFFFF
+    _LE_META_EVENT_BIT = 1 << 61
+
+    # The controller's default LE event mask already enables connection
+    # complete, connection update complete and long term key request.
+    _DEFAULT_LE_EVENT_MASK = 0x000000000000001F
+
+    @staticmethod
+    def _to_little_endian(value: int, width: int) -> List[int]:
+        """Splits an integer into `width` bytes, lowest byte first."""
+        return [(value >> (8 * i)) & 0xFF for i in range(width)]
+
     def __init__(self, transport: HCITransport):
         self.transport = transport
 
@@ -43,6 +58,29 @@ class BLEBroadcaster:
         # HCI Reset before any other command. OCF 0x0003 under the Controller &
         # Baseband OGF is "Reset".
         packet = self._build_hci_packet(ocf=0x0003, ogf=self.OGF_CONTROLLER_BASEBAND, data=[])
+        self.transport.send_control_packet(packet)
+
+    def set_event_mask(self):
+        """Enables delivery of LE Meta events alongside the controller defaults."""
+        # Without this the controller withholds every LE Meta event, so a peer
+        # could connect and the host would never be told.
+        mask = self._DEFAULT_EVENT_MASK | self._LE_META_EVENT_BIT
+        packet = self._build_hci_packet(
+            ocf=0x0001,
+            ogf=self.OGF_CONTROLLER_BASEBAND,
+            data=self._to_little_endian(mask, 8),
+        )
+        self.transport.send_control_packet(packet)
+
+    def set_le_event_mask(self):
+        """Selects which LE Meta subevents the controller reports."""
+        # Set explicitly rather than relying on the reset default, so the
+        # subevents the stack depends on are stated in one place.
+        packet = self._build_hci_packet(
+            ocf=0x0001,
+            ogf=self.OGF_LE_CONTROLLER,
+            data=self._to_little_endian(self._DEFAULT_LE_EVENT_MASK, 8),
+        )
         self.transport.send_control_packet(packet)
 
     def configure_advertising(self, interval_ms: int = 800):
