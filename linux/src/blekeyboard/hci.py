@@ -62,6 +62,9 @@ class ConnectionComplete:
     role: int
     peer_address_type: int
     peer_address: str
+    # The address as it arrived, least significant octet first. Pairing mixes
+    # it into the confirm value in exactly this order.
+    peer_address_raw: bytes = b""
 
 
 @dataclass
@@ -250,6 +253,7 @@ def _parse_le_meta(subevent: int, data: bytes):
             role=data[3],
             peer_address_type=data[4],
             peer_address=format_address(data[5:11]),
+            peer_address_raw=bytes(data[5:11]),
         )
 
     if subevent == LE_LONG_TERM_KEY_REQUEST and len(data) >= 12:

@@ -83,6 +83,62 @@ class BLEBroadcaster:
         )
         self.transport.send_control_packet(packet)
 
+    def le_encrypt(self, key: bytes, plaintext: bytes):
+        """
+        Runs one AES-128 block through the controller's encryption engine.
+
+        The Security Manager is built on AES-128, and borrowing the
+        controller's engine keeps the package free of a crypto dependency.
+        OCF 0x0017 under the LE group.
+        """
+        if len(key) != 16:
+            raise ValueError(f"Key must be 16 bytes, got {len(key)}.")
+        if len(plaintext) != 16:
+            raise ValueError(f"Plaintext must be 16 bytes, got {len(plaintext)}.")
+
+        packet = self._build_hci_packet(
+            ocf=0x0017,
+            ogf=self.OGF_LE_CONTROLLER,
+            data=list(key) + list(plaintext),
+        )
+        self.transport.send_control_packet(packet)
+
+    def le_rand(self):
+        """Requests eight random octets from the controller. OCF 0x0018."""
+        packet = self._build_hci_packet(ocf=0x0018, ogf=self.OGF_LE_CONTROLLER, data=[])
+        self.transport.send_control_packet(packet)
+
+    def read_bd_addr(self):
+        """Reads the controller's own public address. OCF 0x0009, informational group."""
+        packet = self._build_hci_packet(ocf=0x0009, ogf=self.OGF_INFORMATIONAL, data=[])
+        self.transport.send_control_packet(packet)
+
+    def le_long_term_key_request_reply(self, handle: int, long_term_key: bytes):
+        """
+        Hands the controller the key for a link the peer is encrypting.
+
+        The controller asks for this when the initiator starts encryption, and
+        supplying it is what actually secures the link. OCF 0x001A.
+        """
+        if len(long_term_key) != 16:
+            raise ValueError(f"Long term key must be 16 bytes, got {len(long_term_key)}.")
+
+        packet = self._build_hci_packet(
+            ocf=0x001A,
+            ogf=self.OGF_LE_CONTROLLER,
+            data=self._to_little_endian(handle, 2) + list(long_term_key),
+        )
+        self.transport.send_control_packet(packet)
+
+    def le_long_term_key_request_negative_reply(self, handle: int):
+        """Tells the controller no key is available, aborting encryption. OCF 0x001B."""
+        packet = self._build_hci_packet(
+            ocf=0x001B,
+            ogf=self.OGF_LE_CONTROLLER,
+            data=self._to_little_endian(handle, 2),
+        )
+        self.transport.send_control_packet(packet)
+
     def read_le_buffer_size(self):
         """Asks the controller how much outbound ACL data it can hold."""
         # The reply gives the maximum LE ACL payload and how many such packets
