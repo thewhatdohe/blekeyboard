@@ -195,7 +195,8 @@ class Link:
         self._security.begin_connection(event.peer_address_raw, event.peer_address_type)
 
         role = "peripheral" if event.role == ROLE_PERIPHERAL else "central"
-        self._log(f"Connected to {event.peer_address} as {role}, handle 0x{event.handle:04X}.")
+        self._log(f"Connected to {event.peer_address} as {role}, handle 0x{event.handle:04X}, "
+                  f"connection interval {event.interval_ms:.1f}ms.")
 
         # A peripheral cannot start pairing, so it asks the peer to. Some
         # hosts ignore this until they need a protected attribute, in which

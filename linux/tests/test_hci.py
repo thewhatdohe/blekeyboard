@@ -48,6 +48,9 @@ def test_le_connection_complete_is_decoded():
     assert event.handle == 0x0040
     assert event.role == ROLE_PERIPHERAL
     assert event.peer_address == "AA:BB:CC:DD:EE:FF"
+    # 0x0018 units of 1.25ms is a 30ms connection interval.
+    assert event.interval_units == 0x0018
+    assert event.interval_ms == 30.0
 
 
 def test_enhanced_connection_complete_decodes_like_the_legacy_form():
