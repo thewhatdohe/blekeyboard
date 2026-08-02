@@ -38,14 +38,15 @@ from blekeyboard.profile import build_database
 
 DEFAULT_DEVICE_NAME = "BLE-Ducky"
 
-# How long a key is held before its release report is sent. HID hosts debounce
-# on the report boundary, not on time, so this only needs to be long enough
-# that down and up are unambiguously two separate reports.
-KEY_HOLD_SECONDS = 0.015
-
-# Gap between characters in write()/print(). Zero works against most hosts;
-# this exists for the ones that drop keystrokes typed faster than a human can.
-INTER_CHARACTER_SECONDS = 0.0
+# How long a key is held before its release report is sent, and the gap
+# before the next character starts. Both matter relative to the connection
+# interval the central negotiates - Link now logs it on every connection -
+# since a report sent faster than that interval allows onto the air is at
+# the mercy of however the host's stack buffers or coalesces the backlog.
+# 30ms gives real margin above the intervals phones typically negotiate
+# (often in the 15-50ms range) without making typing perceptibly slow.
+KEY_HOLD_SECONDS = 0.03
+INTER_CHARACTER_SECONDS = 0.03
 
 
 class Keyboard:
