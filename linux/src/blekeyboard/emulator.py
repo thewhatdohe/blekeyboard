@@ -181,34 +181,52 @@ class BLEBroadcaster:
         packet = self._build_hci_packet(ocf=0x0006, ogf=self.OGF_LE_CONTROLLER, data=params)
         self.transport.send_control_packet(packet)
 
-    def set_advertising_payload(self, name: str):
-        """Constructs the LE advertising data payload (flags plus complete local name)."""
+    def set_advertising_payload(self, name: str, service_uuids: List[int] = None):
+        """
+        Constructs the LE advertising data payload: flags, the complete local
+        name, and optionally a list of 16-bit service UUIDs.
+
+        Advertising the HID service UUID is what lets a host recognise and
+        offer to pair the device as a keyboard before any connection is made,
+        rather than showing it as an unidentified peripheral.
+        """
         # Convert our string name (e.g., "blekeyboard") into raw numerical bytes.
         name_bytes = name.encode('utf-8')
-        
-        # A standard single BLE advertising packet can only hold 31 bytes total.
-        # We use 5 bytes for headers/flags, leaving exactly 26 bytes maximum for the device name.
-        if len(name_bytes) > 26:
-            raise ValueError("Device name string exceeds standard advertising slot bounds (max 26 bytes).")
-            
+
         # Flags tell smartphones what kind of device this is.
         # 0x02 = Length of flag data (2 bytes). 0x01 = Type (Flags). 0x06 = General Discoverable & BR/EDR Not Supported.
         flags = [0x02, 0x01, 0x06]
-        
+
         # The name section needs its own mini-header inside the packet.
         # len(name_bytes) + 1 tells the phone how long the name data block is (including the type byte).
         # 0x09 is the DataType flag meaning "Complete Local Name".
         name_header = [len(name_bytes) + 1, 0x09]
-        
+
         # Combine the flags, the name header, and the actual characters of the name into one payload.
         payload_data = flags + name_header + list(name_bytes)
+
+        if service_uuids:
+            # Type 0x03 is the Complete List of 16-bit Service Class UUIDs,
+            # each written little-endian as everywhere else in HCI.
+            uuid_bytes = []
+            for uuid in service_uuids:
+                uuid_bytes += [uuid & 0xFF, (uuid >> 8) & 0xFF]
+            payload_data += [len(uuid_bytes) + 1, 0x03] + uuid_bytes
+
         total_len = len(payload_data)
-        
+
+        # A single advertising packet can only hold 31 bytes total.
+        if total_len > 31:
+            raise ValueError(
+                f"Advertising payload of {total_len} bytes exceeds the 31 byte limit; "
+                "shorten the name or advertise fewer services."
+            )
+
         # The BLE chip requires the payload argument to be exactly 32 bytes long.
-        # Byte 0 must be the length of our actual data. 
+        # Byte 0 must be the length of our actual data.
         # The remaining space up to 31 bytes must be padded out with empty zeroes (0x00).
         full_packet_args = [total_len] + payload_data + ([0x00] * (31 - total_len))
-        
+
         # OCF 0x0008 is the official Bluetooth spec code for "LE Set Advertising Data".
         packet = self._build_hci_packet(ocf=0x0008, ogf=self.OGF_LE_CONTROLLER, data=full_packet_args)
         self.transport.send_control_packet(packet)

@@ -6,9 +6,11 @@ See [`../windows`](../windows) for the Windows implementation. The HCI packet co
 
 ## Project status
 
-Alpha, and currently ahead of the Windows implementation. Verified against real hardware: the controller is claimed, reset and configured, advertises a discoverable name, accepts an incoming connection, serves a GATT attribute table that a client can discover and read, and pairs with the peer to encrypt the link. The HID layer is in development, so a connected device cannot yet receive keystrokes.
+Alpha, and currently ahead of the Windows implementation. The full stack is implemented and verified against real hardware: the controller is claimed, reset and configured, advertises as a discoverable HID keyboard, is paired through the host operating system's own Bluetooth settings, enrols as a keyboard via HID over GATT, and delivers key reports over the encrypted link. Decoding a captured session against the US layout table confirms every keystroke arrives correctly formed.
 
-Pairing implements LE Legacy with the Just Works association model, the only one available to a device with no display and no keypad. It leaves an established session safe from passive eavesdropping but offers no protection against an attacker present during pairing. Keys are not retained, so each connection pairs again. AES is performed by the controller through the LE Encrypt command, which is what allows the implementation to stay free of a cryptography dependency. See the [project roadmap](../README.md#roadmap).
+Pairing implements LE Legacy with the Just Works association model, the only one available to a device with no display and no keypad. It leaves an established session safe from passive eavesdropping but offers no protection against an attacker present during pairing. Keys are not retained, so each connection pairs again. AES is performed by the controller through the LE Encrypt command, which is what allows the implementation to stay free of a cryptography dependency.
+
+A host will always prompt to confirm pairing with a new device before accepting input from it; this is a platform-level gate BLE HID has no way around. See the [project roadmap](../README.md#roadmap) and the BLE injection limitation noted there.
 
 ## How it works
 
@@ -63,9 +65,40 @@ sudo setcap cap_net_admin+eip $(readlink -f $(which python3))
 sudo python -m blekeyboard
 ```
 
-Starts the advertising service and holds the adapter until interrupted with `Ctrl+C`.
+Advertises as a keyboard, waits for a host to pair and subscribe to notifications, then prompts for Enter before typing a demonstration string. Holds the adapter until interrupted with `Ctrl+C`.
 
-### Library
+### Scripting API
+
+```python
+from blekeyboard import Keyboard
+
+keyboard = Keyboard()
+keyboard.connect()  # blocks until a host has paired and subscribed
+
+keyboard.press(Keyboard.KEY_GUI, "r")  # open Run on Windows
+keyboard.release_all()
+
+keyboard.print("notepad\n")
+```
+
+`connect()` brings the adapter up, advertises, and blocks until a host has paired and subscribed to notifications; pass `timeout=` to give up after a limited wait instead of blocking indefinitely. `press()`/`release()` accept single characters or raw keycodes such as the `Keyboard.KEY_*` modifier constants, and accumulate into a held combination across calls. `write()` types one character; `print()` (aliased as `type()`) types a string.
+
+#### API reference
+
+| Method | Description |
+| --- | --- |
+| `Keyboard.connect(timeout=None)` | Brings up the adapter, advertises, and waits for a host to pair and subscribe. Returns whether that happened. |
+| `Keyboard.is_connected()` | Whether a host is currently paired and subscribed. |
+| `Keyboard.disconnect()` | Stops advertising and releases the adapter. |
+| `Keyboard.press(*keys)` | Adds each key to the held combination and sends the resulting report. |
+| `Keyboard.release(*keys)` | Removes each key from the held combination and sends the resulting report. |
+| `Keyboard.release_all()` | Releases every held key. |
+| `Keyboard.write(char)` | Presses and releases a single character, preserving any keys held via `press()`. |
+| `Keyboard.print(text)` / `Keyboard.type(text)` | Types a string one character at a time. |
+
+### Low-level API
+
+The scripting API is built on `HCITransport`, `BLEBroadcaster`, and `Link`, which remain available directly for anything the high-level API does not cover:
 
 ```python
 import time
@@ -97,7 +130,7 @@ finally:
     transport.release()
 ```
 
-### API reference
+#### Low-level API reference
 
 | Method | Description |
 | --- | --- |
@@ -118,7 +151,7 @@ finally:
 | `BLEBroadcaster.le_long_term_key_request_reply(handle, key)` | Supplies the key that encrypts a link. |
 | `BLEBroadcaster.le_long_term_key_request_negative_reply(handle)` | Declines to supply a key, aborting encryption. |
 | `BLEBroadcaster.configure_advertising(interval_ms)` | Sets advertising parameters. Accepts 20 ms to 10240 ms. |
-| `BLEBroadcaster.set_advertising_payload(name)` | Sets advertising data to flags and the complete local name, up to 26 bytes. |
+| `BLEBroadcaster.set_advertising_payload(name, service_uuids=None)` | Sets advertising data: flags, the complete local name, and optionally a list of 16-bit service UUIDs. |
 | `BLEBroadcaster.set_state(enable)` | Enables or disables advertising. |
 | `BLEBroadcaster.send_keepalive_ping()` | Reads local version information as a controller liveness check. |
 
@@ -141,4 +174,4 @@ pytest
 
 ## Disclaimer
 
-This project is intended for educational and experimental use. Behaviour depends heavily on controller and driver support and may vary across hardware and operating system configurations.
+This project is intended for authorized security testing and research. Use it only against systems you own or have explicit written permission to test. Behaviour depends heavily on controller and driver support and may vary across hardware and operating system configurations.

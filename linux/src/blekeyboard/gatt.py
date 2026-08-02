@@ -117,6 +117,24 @@ class AttributeDatabase:
     def in_range(self, start: int, end: int):
         return [a for a in self.attributes if start <= a.handle <= end]
 
+    def find_descriptor(self, value_handle: int, descriptor_uuid) -> Optional[Attribute]:
+        """
+        Finds a descriptor belonging to the characteristic at `value_handle`.
+
+        A characteristic's descriptors are the attributes following its value,
+        up to whatever declares the next characteristic or service. Searching
+        that way, rather than assuming a fixed offset, matches how a real
+        client would locate a descriptor by handle range.
+        """
+        for attribute in self.attributes:
+            if attribute.handle <= value_handle:
+                continue
+            if attribute.uuid in (UUID_CHARACTERISTIC, *SERVICE_DECLARATION_TYPES):
+                break
+            if attribute.uuid == descriptor_uuid:
+                return attribute
+        return None
+
     def group_end_handle(self, service: Attribute) -> int:
         """
         Last handle belonging to a service.
@@ -368,6 +386,24 @@ class GattServer:
             attribute.on_write(attribute.value)
 
         return None if is_command else att.write_response()
+
+    def is_subscribed(self, attribute: Attribute) -> bool:
+        """
+        Whether the client has enabled notifications on this characteristic.
+
+        A client that has not written its Client Characteristic Configuration
+        descriptor has not asked to receive anything, and sending it data
+        anyway is not meaningful to it.
+        """
+        cccd = self.database.find_descriptor(
+            attribute.handle, UUID_CLIENT_CHARACTERISTIC_CONFIGURATION)
+        if cccd is None or len(cccd.value) < 2:
+            return False
+        return bool(int.from_bytes(cccd.value, "little") & CCCD_NOTIFICATION_ENABLED)
+
+    def build_notification(self, attribute: Attribute, value: bytes) -> bytes:
+        """Builds the ATT PDU for a Handle Value Notification of an attribute."""
+        return att.handle_value_notification(attribute.handle, value)
 
     def _read_denial(self, attribute) -> Optional[int]:
         """The error code that blocks reading this attribute, if any."""

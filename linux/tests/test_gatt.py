@@ -48,7 +48,8 @@ def write(handle, value, command=False):
 
 @pytest.fixture
 def database():
-    return build_database("BLE-Ducky")
+    database, _input_report = build_database("BLE-Ducky")
+    return database
 
 
 @pytest.fixture
@@ -336,17 +337,26 @@ class TestUnsupportedRequests:
 class TestFullClientDiscovery:
     """Walks the sequence a real client performs after connecting."""
 
-    def test_a_client_can_enumerate_everything_and_read_a_value(self, server):
+    def test_a_client_can_enumerate_every_service(self, server):
         server.handle_pdu(bytes([att.EXCHANGE_MTU_REQUEST]) + (527).to_bytes(2, "little"))
 
         services = _walk_services(server)
-        assert services == [
-            (0x0001, 0x0005, UUID_GAP_SERVICE),
-            (0x0006, 0x0006, 0x1801),
+        assert [uuid for _, _, uuid in services] == [
+            UUID_GAP_SERVICE,
+            0x1801,  # Generic Attribute
+            0x180A,  # Device Information
+            0x180F,  # Battery
+            0x1812,  # HID
         ]
+        # Every service's range must be non-empty and the services must not overlap.
+        for (_, end, _), (next_start, _, _) in zip(services, services[1:]):
+            assert next_start == end + 1
+
+    def test_a_client_can_read_the_device_name(self, server):
+        server.handle_pdu(bytes([att.EXCHANGE_MTU_REQUEST]) + (527).to_bytes(2, "little"))
 
         characteristics = _walk_characteristics(server)
-        assert [uuid for _, uuid in characteristics] == [UUID_DEVICE_NAME, UUID_APPEARANCE]
+        assert UUID_DEVICE_NAME in dict((uuid, handle) for handle, uuid in characteristics)
 
         name_handle = dict((uuid, handle) for handle, uuid in characteristics)[UUID_DEVICE_NAME]
         response = server.handle_pdu(read(name_handle))
@@ -408,6 +418,86 @@ def _walk_characteristics(server):
             break
         start = last_declaration + 1
     return found
+
+
+class TestDescriptorLookup:
+    def test_cccd_following_a_characteristic_is_found(self):
+        db = AttributeDatabase()
+        db.add_service(0x1800)
+        _, value = db.add_characteristic(0x2A00, PROP_READ | PROP_NOTIFY, b"x")
+        cccd = db.add_descriptor(UUID_CLIENT_CHARACTERISTIC_CONFIGURATION, b"\x00\x00")
+
+        assert db.find_descriptor(value.handle, UUID_CLIENT_CHARACTERISTIC_CONFIGURATION) is cccd
+
+    def test_lookup_does_not_cross_into_the_next_characteristic(self):
+        db = AttributeDatabase()
+        db.add_service(0x1800)
+        _, first_value = db.add_characteristic(0x2A00, PROP_READ, b"x")
+        db.add_characteristic(0x2A01, PROP_READ | PROP_NOTIFY, b"y")
+        db.add_descriptor(UUID_CLIENT_CHARACTERISTIC_CONFIGURATION, b"\x00\x00")
+
+        assert db.find_descriptor(
+            first_value.handle, UUID_CLIENT_CHARACTERISTIC_CONFIGURATION) is None
+
+    def test_lookup_does_not_cross_into_the_next_service(self):
+        db = AttributeDatabase()
+        db.add_service(0x1800)
+        _, value = db.add_characteristic(0x2A00, PROP_READ, b"x")
+        db.add_service(0x1801)
+        db.add_descriptor(UUID_CLIENT_CHARACTERISTIC_CONFIGURATION, b"\x00\x00")
+
+        assert db.find_descriptor(
+            value.handle, UUID_CLIENT_CHARACTERISTIC_CONFIGURATION) is None
+
+    def test_missing_descriptor_returns_none(self):
+        db = AttributeDatabase()
+        db.add_service(0x1800)
+        _, value = db.add_characteristic(0x2A00, PROP_READ, b"x")
+        assert db.find_descriptor(value.handle, 0x9999) is None
+
+
+class TestSubscriptionState:
+    def _server_with_notifiable_characteristic(self):
+        db = AttributeDatabase()
+        db.add_service(0x1812)
+        _, value = db.add_characteristic(0x2A4D, PROP_READ | PROP_NOTIFY, bytes(9))
+        db.add_descriptor(UUID_CLIENT_CHARACTERISTIC_CONFIGURATION, b"\x00\x00", writable=True)
+        return GattServer(db), value
+
+    def test_not_subscribed_before_the_cccd_is_written(self):
+        server, value = self._server_with_notifiable_characteristic()
+        assert not server.is_subscribed(value)
+
+    def test_subscribed_after_the_notification_bit_is_written(self):
+        server, value = self._server_with_notifiable_characteristic()
+        server.handle_pdu(write(value.handle + 1, b"\x01\x00"))
+        assert server.is_subscribed(value)
+
+    def test_not_subscribed_once_the_bit_is_cleared_again(self):
+        server, value = self._server_with_notifiable_characteristic()
+        server.handle_pdu(write(value.handle + 1, b"\x01\x00"))
+        server.handle_pdu(write(value.handle + 1, b"\x00\x00"))
+        assert not server.is_subscribed(value)
+
+    def test_indicate_bit_alone_does_not_count_as_notify_subscription(self):
+        server, value = self._server_with_notifiable_characteristic()
+        server.handle_pdu(write(value.handle + 1, b"\x02\x00"))
+        assert not server.is_subscribed(value)
+
+    def test_characteristic_without_a_cccd_is_never_subscribed(self):
+        db = AttributeDatabase()
+        db.add_service(0x1812)
+        _, value = db.add_characteristic(0x2A4D, PROP_READ, bytes(9))
+        assert not GattServer(db).is_subscribed(value)
+
+
+class TestNotificationBuilding:
+    def test_notification_pdu_carries_the_handle_and_value(self):
+        server, value = TestSubscriptionState()._server_with_notifiable_characteristic()
+        pdu = server.build_notification(value, b"\x01\x02\x03")
+        assert pdu[0] == att.HANDLE_VALUE_NOTIFICATION
+        assert int.from_bytes(pdu[1:3], "little") == value.handle
+        assert pdu[3:] == b"\x01\x02\x03"
 
 
 def _value_handle(database, uuid):
