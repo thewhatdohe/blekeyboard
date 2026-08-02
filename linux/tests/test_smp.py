@@ -78,13 +78,23 @@ class TestPairingRequest:
         features = PairingFeatures.parse(response[1:])
         assert not features.auth_req & smp.AUTH_REQ_SECURE_CONNECTIONS
 
-    def test_no_keys_are_distributed(self):
+    def test_nothing_is_requested_from_the_peer(self):
+        # A keyboard never reads anything back from the central, so there is
+        # no reason to ask it to distribute keys of its own.
         manager = make_manager()
         response = manager.handle_pdu(pairing_request(initiator_keys=0x07,
                                                       responder_keys=0x07))
         features = PairingFeatures.parse(response[1:])
         assert features.initiator_key_distribution == 0x00
-        assert features.responder_key_distribution == 0x00
+
+    def test_responder_declares_it_will_distribute_an_encryption_key(self):
+        # Without this, several hosts never treat the link as a real bond,
+        # regardless of whether the current session happens to be encrypted.
+        manager = make_manager()
+        response = manager.handle_pdu(pairing_request(initiator_keys=0x07,
+                                                      responder_keys=0x07))
+        features = PairingFeatures.parse(response[1:])
+        assert features.responder_key_distribution == smp.KEY_DIST_ENC_KEY
 
     def test_demand_for_man_in_the_middle_protection_is_refused(self):
         manager = make_manager()
@@ -183,11 +193,47 @@ class TestLongTermKey:
         assert make_manager().long_term_key_for(0, bytes(8)) is None
 
     def test_a_request_to_resume_an_old_bond_is_declined(self):
-        # A non-zero diversifier means the peer expects a stored key, and
-        # nothing is stored because this implementation does not bond.
+        # A non-zero diversifier means the peer expects a previously
+        # distributed key. SecurityManager only ever holds the current
+        # session's key; matching a resumed bond is Link's job, since a
+        # bond outlives any single SecurityManager instance.
         manager = self._paired()
         assert manager.long_term_key_for(0x1234, bytes(8)) is None
-        assert manager.long_term_key_for(0, bytes(range(8))) is None
+
+
+class TestBondKeyGeneration:
+    def test_generated_keys_are_the_expected_lengths(self):
+        keys = make_manager().create_bond_keys()
+        assert len(keys.ltk) == 16
+        assert len(keys.rand) == 8
+
+    def test_ediv_is_zero(self):
+        # Only Rand needs to be unpredictable; EDIV is just along for the ride.
+        assert make_manager().create_bond_keys().ediv == 0
+
+    def test_successive_calls_produce_different_keys(self):
+        manager = make_manager()
+        first = manager.create_bond_keys()
+        second = manager.create_bond_keys()
+        assert first.ltk != second.ltk
+        assert first.rand != second.rand
+
+    def test_encoded_pdus_carry_the_key_and_the_ediv_rand_pair(self):
+        keys = smp.BondKeys(ltk=bytes(range(16)), ediv=0x1234, rand=bytes(range(100, 108)))
+        encryption_information, master_identification = keys.encode_pdus()
+
+        assert encryption_information[0] == smp.ENCRYPTION_INFORMATION
+        assert encryption_information[1:] == keys.ltk
+
+        assert master_identification[0] == smp.MASTER_IDENTIFICATION
+        assert int.from_bytes(master_identification[1:3], "little") == keys.ediv
+        assert master_identification[3:] == keys.rand
+
+    def test_matches_only_the_exact_ediv_and_rand_it_was_given(self):
+        keys = smp.BondKeys(ltk=bytes(16), ediv=0x1234, rand=bytes(range(8)))
+        assert keys.matches(0x1234, bytes(range(8)))
+        assert not keys.matches(0x1235, bytes(range(8)))
+        assert not keys.matches(0x1234, bytes(range(1, 9)))
 
 
 class TestLifecycle:

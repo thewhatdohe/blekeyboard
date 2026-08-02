@@ -52,6 +52,12 @@ class Link:
         # They are replayed once it completes rather than being dropped.
         self._deferred = []
 
+        # The most recently distributed bond, kept in memory only. Unlike
+        # `_security`, this survives across `_handle_connection` calls, since
+        # its whole purpose is to answer a *later* connection's Long Term Key
+        # Request without repeating the SMP pairing exchange.
+        self._bond = None
+
         self._security = SecurityManager(
             self._encrypt_block, self._random_bytes, self._local_address)
 
@@ -210,6 +216,16 @@ class Link:
         self._log(f"Advertising as '{self._device_name}' again.")
 
     def _handle_long_term_key_request(self, event):
+        # A peer resuming a previous bond skips SMP pairing entirely and asks
+        # for this key directly, naming it by the EDIV/Rand it was given when
+        # the bond was formed. Checked first, since `_security` was reset for
+        # this connection and would have no session key to offer such a peer.
+        if self._bond is not None and self._bond.matches(
+                event.encrypted_diversifier, event.random_number):
+            self._log("  Long term key requested; resuming the existing bond.")
+            self._broadcaster.le_long_term_key_request_reply(event.handle, self._bond.ltk)
+            return
+
         key = self._security.long_term_key_for(
             event.encrypted_diversifier, event.random_number)
 
@@ -223,13 +239,38 @@ class Link:
 
     def _handle_encryption_change(self, event):
         enabled = event.status == 0x00 and event.enabled != 0x00
+        # A fresh SMP pairing happened this connection if and only if a
+        # session key was derived; a resumed bond leaves this None, and
+        # there is nothing new to distribute in that case.
+        completed_fresh_pairing = self._security.short_term_key is not None
         self._security.note_encryption_change(enabled)
         self._server.encrypted = enabled
 
-        if enabled:
-            self._log("  Link is now encrypted.")
-        else:
+        if not enabled:
             self._log(f"  Encryption failed, status 0x{event.status:02X}.")
+            return
+
+        self._log("  Link is now encrypted.")
+        if completed_fresh_pairing:
+            self._distribute_bond_keys()
+
+    def _distribute_bond_keys(self):
+        """
+        Hands the peer a Long Term Key for future reconnection.
+
+        Sent immediately after Phase 2 pairing encrypts the link, per the
+        responder key distribution this implementation declares in its
+        Pairing Response. Without this, several hosts - Android's HID input
+        framework among them - never treat the peripheral as genuinely
+        bonded, regardless of whether the current session is encrypted.
+        """
+        self._bond = self._security.create_bond_keys()
+        encryption_information, master_identification = self._bond.encode_pdus()
+
+        for pdu in (encryption_information, master_identification):
+            self._log(f"  SMP -> {_describe(pdu)} (key distribution)")
+            self._transport.send_acl_payload(
+                self.connected_handle, build_frame(CID_SMP, pdu))
 
     def _handle_acl(self, acl):
         reassembler = self._reassemblers.get(acl.handle)

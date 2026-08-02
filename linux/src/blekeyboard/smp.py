@@ -11,6 +11,16 @@ key is zero, so an attacker positioned between the two devices during
 pairing can complete it with both. It protects an already-paired session
 from passive eavesdropping, nothing more.
 
+After encryption succeeds, the responder key distribution phase hands the
+peer a freshly generated Long Term Key tied to an EDIV/Rand pair. This is
+not just a convenience for later reconnection: several BLE hosts, Android's
+HID input framework included, gate whether a peripheral is treated as a
+trusted input device on whether a real bond was formed, not merely on
+whether the current session happens to be encrypted. Skipping this leaves a
+peripheral that encrypts correctly and is nonetheless never actually treated
+as a keyboard. Nothing is persisted to disk; the bond exists only for the
+lifetime of the process, so a fresh run still requires re-pairing.
+
 All 128-bit values here stay least significant octet first, matching both the
 wire format and the controller's encryption command.
 """
@@ -51,6 +61,11 @@ IO_CAPABILITY_NO_INPUT_NO_OUTPUT = 0x03
 AUTH_REQ_BONDING = 0x01
 AUTH_REQ_MITM = 0x04
 AUTH_REQ_SECURE_CONNECTIONS = 0x08
+
+# Key distribution bits, carried in the last two octets of a pairing PDU.
+KEY_DIST_ENC_KEY = 0x01
+KEY_DIST_ID_KEY = 0x02
+KEY_DIST_SIGN_KEY = 0x04
 
 MAX_ENCRYPTION_KEY_SIZE = 16
 MIN_ENCRYPTION_KEY_SIZE = 7
@@ -113,6 +128,30 @@ def security_request(auth_req: int = 0x00) -> bytes:
     wants the link secured and leave the peer to begin the exchange.
     """
     return bytes([SECURITY_REQUEST, auth_req])
+
+
+@dataclass
+class BondKeys:
+    """A Long Term Key and the EDIV/Rand pair a peer will present to reuse it."""
+    ltk: bytes
+    ediv: int
+    rand: bytes
+
+    def encode_pdus(self) -> tuple[bytes, bytes]:
+        """
+        The two SMP PDUs that hand this bond to the peer.
+
+        Sent as a pair: Encryption Information carries the key itself, and
+        Master Identification carries the EDIV/Rand the peer echoes back on
+        a later LE Long Term Key Request to say which bond it wants resumed.
+        """
+        encryption_information = bytes([ENCRYPTION_INFORMATION]) + self.ltk
+        master_identification = bytes([MASTER_IDENTIFICATION]) \
+            + self.ediv.to_bytes(2, "little") + self.rand
+        return encryption_information, master_identification
+
+    def matches(self, encrypted_diversifier: int, random_number: bytes) -> bool:
+        return encrypted_diversifier == self.ediv and bytes(random_number) == self.rand
 
 
 class SecurityManager:
@@ -206,16 +245,18 @@ class SecurityManager:
         self._preq = bytes(whole_pdu)
 
         # Secure Connections is deliberately not claimed, which is what makes
-        # the peer fall back to the legacy exchange this implements. No keys
-        # are distributed in either direction, so the pairing lasts only for
-        # the session.
+        # the peer fall back to the legacy exchange this implements. Nothing
+        # is requested from the peer, since a keyboard never needs to read
+        # anything back from it, but this responder does distribute its own
+        # EncKey after encryption succeeds, forming a real bond rather than
+        # a session-only encrypted link.
         response = PairingFeatures(
             io_capability=IO_CAPABILITY_NO_INPUT_NO_OUTPUT,
             oob_data_flag=0x00,
             auth_req=0x00,
             max_key_size=MAX_ENCRYPTION_KEY_SIZE,
             initiator_key_distribution=0x00,
-            responder_key_distribution=0x00,
+            responder_key_distribution=KEY_DIST_ENC_KEY,
         )
         self._pres = response.encode(PAIRING_RESPONSE)
         self.state = State.AWAITING_CONFIRM
@@ -270,6 +311,18 @@ class SecurityManager:
 
     def note_encryption_change(self, enabled: bool):
         self.state = State.ENCRYPTED if enabled else State.FAILED
+
+    def create_bond_keys(self) -> BondKeys:
+        """
+        Generates a fresh Long Term Key for the responder key distribution
+        phase, to be sent once the current session is encrypted.
+
+        EDIV is left at zero; only Rand needs to be unpredictable, since its
+        job is to let a later LE Long Term Key Request name which bond it
+        wants resumed; it does not need to be cryptographically hidden the
+        way the key itself does.
+        """
+        return BondKeys(ltk=self._random_bytes(16), ediv=0, rand=self._random_bytes(8))
 
     def _confirm_for(self, nonce: bytes) -> bytes:
         return crypto.c1(
