@@ -124,7 +124,12 @@ def _add_hid_service(database: AttributeDatabase):
         bytes([0x11, 0x01, 0x00, 0x02]),
     )
 
-    database.add_characteristic(UUID_REPORT_MAP, PROP_READ, REPORT_MAP)
+    # iOS in particular declines to treat the peripheral as a real HID
+    # device unless this is only readable once the link is encrypted, even
+    # though the HOGP spec itself does not strictly require it here.
+    database.add_characteristic(
+        UUID_REPORT_MAP, PROP_READ, REPORT_MAP, requires_encryption=True,
+    )
 
     database.add_characteristic(UUID_HID_CONTROL_POINT, PROP_WRITE_WITHOUT_RESPONSE)
 
@@ -147,6 +152,7 @@ def _add_hid_service(database: AttributeDatabase):
     database.add_descriptor(
         UUID_REPORT_REFERENCE,
         bytes([KEYBOARD_REPORT_ID, REPORT_TYPE_INPUT]),
+        requires_encryption=True,
     )
 
     return report

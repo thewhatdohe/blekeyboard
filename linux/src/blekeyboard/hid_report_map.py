@@ -12,13 +12,19 @@ report (for example, consumer control / media keys) can be added later
 without changing this one's framing.
 """
 
-KEYBOARD_REPORT_ID = 1
+# No Report ID is declared. In HID over GATT the report ID is carried by the
+# Report Reference descriptor, not as a prefix byte on the report itself, so a
+# single-report keyboard uses report ID 0 and an 8-byte report. Prefixing a
+# report ID byte instead - the USB convention - puts a leading 0x01 where the
+# host expects the modifier byte, and 0x01 is exactly the Left Control bit, so
+# a host parsing it that way sees Control permanently held: every tap becomes
+# a Control-click and modifiers land wrong.
+KEYBOARD_REPORT_ID = 0
 
 REPORT_MAP = bytes([
     0x05, 0x01,        # Usage Page (Generic Desktop)
     0x09, 0x06,        # Usage (Keyboard)
     0xA1, 0x01,        # Collection (Application)
-    0x85, KEYBOARD_REPORT_ID,  #   Report ID (1)
 
     0x05, 0x07,        #   Usage Page (Keyboard/Keypad)
     0x19, 0xE0,        #   Usage Minimum (224, Left Control)
@@ -56,10 +62,9 @@ REPORT_MAP = bytes([
     0xC0,              # End Collection
 ])
 
-# Bytes of one input report on the wire: the Report ID byte the descriptor's
-# Report ID tag requires, the modifier byte, a reserved byte, and up to six
-# keycodes.
-INPUT_REPORT_LENGTH = 9
+# Bytes of one input report on the wire: the modifier byte, a reserved byte,
+# and up to six keycodes. No leading report ID - see the note above the map.
+INPUT_REPORT_LENGTH = 8
 
 # LED states a host may write in the output report, one bit each.
 LED_NUM_LOCK = 0x01
@@ -75,8 +80,9 @@ MAX_SIMULTANEOUS_KEYS = 6
 
 def build_input_report(modifier: int = 0, keycodes=()) -> bytes:
     """
-    Builds one input report: the Report ID, the modifier byte, a reserved
-    byte, and up to six keycodes padded with zero (no key) to fill the array.
+    Builds one input report: the modifier byte, a reserved byte, and up to six
+    keycodes padded with zero (no key) to fill the array. No report ID prefix -
+    the report ID is conveyed by the Report Reference descriptor instead.
 
     An empty `keycodes` with modifier 0 is the all-zero "nothing pressed"
     report a key release sends.
@@ -88,4 +94,4 @@ def build_input_report(modifier: int = 0, keycodes=()) -> bytes:
         )
 
     padded = bytes(keycodes) + bytes(MAX_SIMULTANEOUS_KEYS - len(keycodes))
-    return bytes([KEYBOARD_REPORT_ID, modifier, 0x00]) + padded
+    return bytes([modifier, 0x00]) + padded
