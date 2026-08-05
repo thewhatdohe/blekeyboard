@@ -63,4 +63,4 @@ This project is intended for authorized security testing and research. Use it on
 
 ## License
 
-Released under the MIT License. See [LICENSE](LICENSE).
+Released under the GNU General Public License v3.0. See [LICENSE](LICENSE).
