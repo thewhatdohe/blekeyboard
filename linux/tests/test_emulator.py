@@ -67,6 +67,8 @@ def test_le_event_mask_covers_connection_and_key_request(broadcaster, transport)
     value = int.from_bytes(bytes(mask), "little")
     assert value & (1 << 0)  # LE Connection Complete
     assert value & (1 << 4)  # LE Long Term Key Request
+    assert value & (1 << 7)  # LE Read Local P-256 Public Key Complete
+    assert value & (1 << 8)  # LE Generate DHKey Complete
 
 
 def test_advertising_interval_is_converted_to_slots(broadcaster, transport):
@@ -132,3 +134,22 @@ def test_keepalive_reads_local_version_information(broadcaster, transport):
     # OCF 0x0001 under the informational group gives opcode 0x1001.
     broadcaster.send_keepalive_ping()
     assert transport.last == [0x01, 0x10, 0x00]
+
+
+def test_p256_public_key_request_takes_no_parameters(broadcaster, transport):
+    # OCF 0x0025 under the LE group gives opcode 0x2025.
+    broadcaster.le_read_local_p256_public_key()
+    assert transport.last == [0x25, 0x20, 0x00]
+
+
+def test_generate_dhkey_sends_the_remote_public_key(broadcaster, transport):
+    # OCF 0x0026 under the LE group gives opcode 0x2026.
+    remote_key = bytes(range(64))
+    broadcaster.le_generate_dhkey(remote_key)
+    assert transport.last == [0x26, 0x20, 0x40] + list(remote_key)
+
+
+def test_generate_dhkey_rejects_a_malformed_public_key(broadcaster, transport):
+    with pytest.raises(ValueError):
+        broadcaster.le_generate_dhkey(bytes(63))
+    assert transport.packets == []

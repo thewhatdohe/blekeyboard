@@ -5,6 +5,14 @@ from blekeyboard.smp import PairingFeatures, SecurityManager, State
 
 LOCAL_ADDRESS = bytes.fromhex("B6B5B4B3B2B1")
 PEER_ADDRESS = bytes.fromhex("A6A5A4A3A2A1")
+LOCAL_ADDRESS_TYPE = 0x00
+PEER_ADDRESS_TYPE = 0x01
+LOCAL_ADDRESS_WITH_TYPE = LOCAL_ADDRESS + bytes([LOCAL_ADDRESS_TYPE])
+PEER_ADDRESS_WITH_TYPE = PEER_ADDRESS + bytes([PEER_ADDRESS_TYPE])
+
+# A deterministic stand-in public key, distinct from whatever the peer sends.
+OWN_PUBLIC_KEY = bytes(range(64))
+PEER_PUBLIC_KEY = bytes(range(100, 164))
 
 
 def fake_encrypt(key, block):
@@ -26,6 +34,29 @@ def make_manager():
     manager = SecurityManager(fake_encrypt, counting_random(), LOCAL_ADDRESS)
     manager.begin_connection(PEER_ADDRESS, peer_address_type=0x01)
     return manager
+
+
+def fake_generate_keypair():
+    return OWN_PUBLIC_KEY
+
+
+def fake_compute_dhkey(peer_public_key):
+    """Deterministic stand-in for ECDH; only the protocol flow is under test."""
+    return bytes(((b * 3) + 1) & 0xFF for b in peer_public_key[:32])
+
+
+def make_sc_manager():
+    manager = SecurityManager(
+        fake_encrypt, counting_random(), LOCAL_ADDRESS,
+        generate_keypair=fake_generate_keypair,
+        compute_dhkey=fake_compute_dhkey,
+    )
+    manager.begin_connection(PEER_ADDRESS, peer_address_type=PEER_ADDRESS_TYPE)
+    return manager
+
+
+def sc_pairing_request(auth_req=smp.AUTH_REQ_SECURE_CONNECTIONS | smp.AUTH_REQ_BONDING):
+    return pairing_request(auth_req=auth_req)
 
 
 def pairing_request(io_capability=smp.IO_CAPABILITY_NO_INPUT_NO_OUTPUT,
@@ -56,6 +87,38 @@ def drive_to_confirm(manager):
     )
     manager.handle_pdu(bytes([smp.PAIRING_CONFIRM]) + peer_confirm)
     return peer_random
+
+
+def drive_sc_to_dhkey_check(manager, peer_random=bytes(range(16))):
+    """
+    Runs the SC exchange up to the point the peer sends its DHKey Check.
+
+    Returns (dhkey, peer_confirm_pdu, own_random), everything a test needs to
+    independently recompute what the manager should have derived at each step.
+    """
+    manager.handle_pdu(sc_pairing_request())
+
+    public_key_response = manager.handle_pdu(bytes([smp.PUBLIC_KEY]) + PEER_PUBLIC_KEY)
+    queued = manager.drain_queued_pdus()
+
+    random_response = manager.handle_pdu(bytes([smp.PAIRING_RANDOM]) + peer_random)
+    own_random = random_response[1:]
+
+    dhkey = fake_compute_dhkey(PEER_PUBLIC_KEY)
+    return dhkey, public_key_response, queued, own_random
+
+
+class TestPeerFeatures:
+    def test_none_before_a_pairing_request_arrives(self):
+        assert make_manager().peer_features is None
+
+    def test_reflects_the_peers_declared_auth_req_and_io_capability(self):
+        manager = make_manager()
+        manager.handle_pdu(pairing_request(io_capability=0x04, auth_req=0x2D))
+
+        features = manager.peer_features
+        assert features.io_capability == 0x04
+        assert features.auth_req == 0x2D
 
 
 class TestPairingRequest:
@@ -96,12 +159,15 @@ class TestPairingRequest:
         features = PairingFeatures.parse(response[1:])
         assert features.responder_key_distribution == smp.KEY_DIST_ENC_KEY
 
-    def test_demand_for_man_in_the_middle_protection_is_refused(self):
+    def test_a_mitm_request_does_not_prevent_pairing(self):
+        # A peer may ask for MITM protection, but a device with no display
+        # and no input can only ever offer Just Works - the request is
+        # simply not satisfiable, not a reason to refuse pairing outright.
         manager = make_manager()
         response = manager.handle_pdu(pairing_request(auth_req=smp.AUTH_REQ_MITM))
 
-        assert response == smp.pairing_failed(smp.FAILED_AUTHENTICATION_REQUIREMENTS)
-        assert manager.state is State.FAILED
+        assert response[0] == smp.PAIRING_RESPONSE
+        assert manager.state is State.AWAITING_CONFIRM
 
     def test_out_of_band_data_is_refused(self):
         manager = make_manager()
@@ -272,3 +338,176 @@ class TestLifecycle:
         manager.begin_connection(PEER_ADDRESS, 0x01)
         assert manager.state is State.IDLE
         assert manager.short_term_key is None
+
+
+class TestSecureConnectionsNegotiation:
+    def test_sc_is_claimed_when_the_peer_offers_it_and_a_keypair_is_available(self):
+        manager = make_sc_manager()
+        response = manager.handle_pdu(sc_pairing_request())
+
+        features = PairingFeatures.parse(response[1:])
+        assert features.auth_req & smp.AUTH_REQ_SECURE_CONNECTIONS
+        assert features.auth_req & smp.AUTH_REQ_BONDING
+        # SC's key exchange already produces a durable LTK, so there is
+        # nothing left to distribute in a separate phase.
+        assert features.responder_key_distribution == 0x00
+        assert manager.use_sc
+        assert manager.state is State.AWAITING_PUBLIC_KEY
+
+    def test_sc_is_not_claimed_when_the_peer_does_not_offer_it(self):
+        manager = make_sc_manager()
+        response = manager.handle_pdu(pairing_request(auth_req=smp.AUTH_REQ_BONDING))
+
+        features = PairingFeatures.parse(response[1:])
+        assert not features.auth_req & smp.AUTH_REQ_SECURE_CONNECTIONS
+        assert not manager.use_sc
+        assert manager.state is State.AWAITING_CONFIRM
+
+    def test_sc_is_not_claimed_without_keypair_callbacks(self):
+        # A manager built without generate_keypair/compute_dhkey (the legacy
+        # constructor call this project still uses in some tests) can never
+        # offer SC, no matter what the peer asks for.
+        manager = make_manager()
+        response = manager.handle_pdu(
+            pairing_request(auth_req=smp.AUTH_REQ_SECURE_CONNECTIONS | smp.AUTH_REQ_BONDING))
+
+        features = PairingFeatures.parse(response[1:])
+        assert not features.auth_req & smp.AUTH_REQ_SECURE_CONNECTIONS
+        assert not manager.use_sc
+
+
+class TestSecureConnectionsKeyExchange:
+    def test_public_key_is_answered_with_our_own_and_a_queued_confirm(self):
+        manager = make_sc_manager()
+        manager.handle_pdu(sc_pairing_request())
+
+        response = manager.handle_pdu(bytes([smp.PUBLIC_KEY]) + PEER_PUBLIC_KEY)
+        assert response == bytes([smp.PUBLIC_KEY]) + OWN_PUBLIC_KEY
+
+        queued = manager.drain_queued_pdus()
+        assert len(queued) == 1
+        assert queued[0][0] == smp.PAIRING_CONFIRM
+        assert len(queued[0]) == 17
+        assert manager.state is State.AWAITING_SC_RANDOM
+
+    def test_wrong_length_public_key_is_refused(self):
+        manager = make_sc_manager()
+        manager.handle_pdu(sc_pairing_request())
+        response = manager.handle_pdu(bytes([smp.PUBLIC_KEY]) + bytes(63))
+        assert response == smp.pairing_failed(smp.FAILED_INVALID_PARAMETERS)
+
+    def test_confirm_matches_an_independent_f4_derivation(self):
+        manager = make_sc_manager()
+        manager.handle_pdu(sc_pairing_request())
+        manager.handle_pdu(bytes([smp.PUBLIC_KEY]) + PEER_PUBLIC_KEY)
+        queued_confirm = manager.drain_queued_pdus()[0]
+
+        random_response = manager.handle_pdu(bytes([smp.PAIRING_RANDOM]) + bytes(range(16)))
+        own_random = random_response[1:]
+
+        # Responder's own confirm always uses u = own key, v = peer's key,
+        # regardless of which side computes it.
+        expected = crypto.f4(fake_encrypt, OWN_PUBLIC_KEY[:32], PEER_PUBLIC_KEY[:32],
+                             own_random, 0)
+        assert queued_confirm[1:] == expected
+
+    def test_sc_random_yields_our_random_and_a_key_matching_independent_f5(self):
+        manager = make_sc_manager()
+        peer_random = bytes(range(16))
+        dhkey, _, _, own_random = drive_sc_to_dhkey_check(manager, peer_random)
+
+        assert manager.state is State.AWAITING_DHKEY_CHECK
+        assert manager.short_term_key is not None
+
+        _, expected_ltk = crypto.f5(
+            fake_encrypt, dhkey, peer_random, own_random,
+            PEER_ADDRESS_WITH_TYPE, LOCAL_ADDRESS_WITH_TYPE,
+        )
+        assert manager.short_term_key == expected_ltk
+
+    def test_wrong_length_sc_random_is_refused(self):
+        manager = make_sc_manager()
+        manager.handle_pdu(sc_pairing_request())
+        manager.handle_pdu(bytes([smp.PUBLIC_KEY]) + PEER_PUBLIC_KEY)
+        manager.drain_queued_pdus()
+
+        response = manager.handle_pdu(bytes([smp.PAIRING_RANDOM]) + bytes(8))
+        assert response == smp.pairing_failed(smp.FAILED_INVALID_PARAMETERS)
+
+
+class TestSecureConnectionsDHKeyCheck:
+    def _expected_mackey_and_dhkey(self, dhkey, peer_random, own_random):
+        mackey, _ = crypto.f5(
+            fake_encrypt, dhkey, peer_random, own_random,
+            PEER_ADDRESS_WITH_TYPE, LOCAL_ADDRESS_WITH_TYPE,
+        )
+        return mackey
+
+    def test_matching_dhkey_check_yields_our_own_and_completes_the_exchange(self):
+        manager = make_sc_manager()
+        peer_random = bytes(range(16))
+        dhkey, _, _, own_random = drive_sc_to_dhkey_check(manager, peer_random)
+        mackey = self._expected_mackey_and_dhkey(dhkey, peer_random, own_random)
+
+        # The peer computes its check using its own nonce first, our nonce
+        # second, and the io_cap it declared in its own Pairing Request.
+        peer_check = crypto.f6(
+            fake_encrypt, mackey, peer_random, own_random, smp._DHKEY_CHECK_R,
+            sc_pairing_request()[1:4],
+            PEER_ADDRESS_WITH_TYPE, LOCAL_ADDRESS_WITH_TYPE,
+        )
+
+        response = manager.handle_pdu(bytes([smp.DHKEY_CHECK]) + peer_check)
+        assert response[0] == smp.DHKEY_CHECK
+        assert manager.state is State.AWAITING_ENCRYPTION
+
+        expected_own_check = crypto.f6(
+            fake_encrypt, mackey, own_random, peer_random, smp._DHKEY_CHECK_R,
+            manager._pres[1:4],
+            LOCAL_ADDRESS_WITH_TYPE, PEER_ADDRESS_WITH_TYPE,
+        )
+        assert response[1:] == expected_own_check
+
+    def test_mismatched_dhkey_check_is_refused(self):
+        manager = make_sc_manager()
+        drive_sc_to_dhkey_check(manager)
+
+        response = manager.handle_pdu(bytes([smp.DHKEY_CHECK]) + bytes(16))
+        assert response == smp.pairing_failed(smp.FAILED_DHKEY_CHECK_FAILED)
+        assert manager.state is State.FAILED
+
+    def test_wrong_length_dhkey_check_is_refused(self):
+        manager = make_sc_manager()
+        drive_sc_to_dhkey_check(manager)
+
+        response = manager.handle_pdu(bytes([smp.DHKEY_CHECK]) + bytes(8))
+        assert response == smp.pairing_failed(smp.FAILED_INVALID_PARAMETERS)
+
+    def test_dhkey_check_out_of_order_is_refused(self):
+        manager = make_sc_manager()
+        response = manager.handle_pdu(bytes([smp.DHKEY_CHECK]) + bytes(16))
+        assert response[0] == smp.PAIRING_FAILED
+
+    def test_long_term_key_is_offered_after_sc_pairing_too(self):
+        manager = make_sc_manager()
+        peer_random = bytes(range(16))
+        dhkey, _, _, own_random = drive_sc_to_dhkey_check(manager, peer_random)
+        mackey = self._expected_mackey_and_dhkey(dhkey, peer_random, own_random)
+        peer_check = crypto.f6(
+            fake_encrypt, mackey, peer_random, own_random, smp._DHKEY_CHECK_R,
+            sc_pairing_request()[1:4],
+            PEER_ADDRESS_WITH_TYPE, LOCAL_ADDRESS_WITH_TYPE,
+        )
+        manager.handle_pdu(bytes([smp.DHKEY_CHECK]) + peer_check)
+
+        assert manager.long_term_key_for(0, bytes(8)) == manager.short_term_key
+
+
+class TestSecureConnectionsPairingConfirmIsUnused:
+    def test_a_pairing_confirm_received_during_sc_is_refused(self):
+        # Only the responder sends a confirm in the Just Works SC flow; this
+        # device should never receive one from the peer.
+        manager = make_sc_manager()
+        manager.handle_pdu(sc_pairing_request())
+        response = manager.handle_pdu(bytes([smp.PAIRING_CONFIRM]) + bytes(16))
+        assert response[0] == smp.PAIRING_FAILED

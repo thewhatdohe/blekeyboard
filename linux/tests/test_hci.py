@@ -4,8 +4,10 @@ from blekeyboard.hci import (
     ConnectionComplete,
     DisconnectionComplete,
     EncryptionChange,
+    GenerateDHKeyComplete,
     LongTermKeyRequest,
     NumberOfCompletedPackets,
+    ReadLocalP256PublicKeyComplete,
     format_address,
     parse_event,
 )
@@ -93,6 +95,33 @@ def test_long_term_key_request_is_decoded():
     assert event.handle == 0x0040
     assert event.random_number == bytes(range(1, 9))
     assert event.encrypted_diversifier == 0x1234
+
+
+def test_p256_public_key_complete_is_decoded():
+    x = bytes(range(32))
+    y = bytes(range(100, 132))
+    packet = [0x04, 0x3E, 0x42, 0x08, 0x00] + list(x) + list(y)
+    event = parse_event(packet)
+    assert isinstance(event, ReadLocalP256PublicKeyComplete)
+    assert event.status == 0x00
+    assert event.public_key == x + y
+
+
+def test_p256_public_key_complete_reports_failure_status():
+    packet = [0x04, 0x3E, 0x02, 0x08, 0x0C]
+    event = parse_event(packet)
+    assert isinstance(event, ReadLocalP256PublicKeyComplete)
+    assert event.status == 0x0C
+    assert event.public_key == b""
+
+
+def test_generate_dhkey_complete_is_decoded():
+    dhkey = bytes(range(200, 232))
+    packet = [0x04, 0x3E, 0x22, 0x09, 0x00] + list(dhkey)
+    event = parse_event(packet)
+    assert isinstance(event, GenerateDHKeyComplete)
+    assert event.status == 0x00
+    assert event.dhkey == dhkey
 
 
 def test_number_of_completed_packets_reports_every_handle():

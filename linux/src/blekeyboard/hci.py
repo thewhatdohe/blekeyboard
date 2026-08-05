@@ -25,6 +25,8 @@ EVT_LE_META = 0x3E
 LE_CONNECTION_COMPLETE = 0x01
 LE_CONNECTION_UPDATE_COMPLETE = 0x03
 LE_LONG_TERM_KEY_REQUEST = 0x05
+LE_READ_LOCAL_P256_PUBLIC_KEY_COMPLETE = 0x08
+LE_GENERATE_DHKEY_COMPLETE = 0x09
 LE_ENHANCED_CONNECTION_COMPLETE = 0x0A
 
 # Link layer roles reported by LE Connection Complete.
@@ -100,6 +102,21 @@ class LongTermKeyRequest:
 @dataclass
 class NumberOfCompletedPackets:
     counts: list[tuple[int, int]] = field(default_factory=list)
+
+
+@dataclass
+class ReadLocalP256PublicKeyComplete:
+    status: int
+    # 64 octets: 32-octet X coordinate followed by 32-octet Y coordinate,
+    # each least significant octet first.
+    public_key: bytes = b""
+
+
+@dataclass
+class GenerateDHKeyComplete:
+    status: int
+    # 32 octets, least significant octet first.
+    dhkey: bytes = b""
 
 
 @dataclass
@@ -273,6 +290,18 @@ def _parse_le_meta(subevent: int, data: bytes):
             handle=_u16(data, 0),
             random_number=data[2:10],
             encrypted_diversifier=_u16(data, 10),
+        )
+
+    if subevent == LE_READ_LOCAL_P256_PUBLIC_KEY_COMPLETE and len(data) >= 1:
+        return ReadLocalP256PublicKeyComplete(
+            status=data[0],
+            public_key=bytes(data[1:65]) if len(data) >= 65 else b"",
+        )
+
+    if subevent == LE_GENERATE_DHKEY_COMPLETE and len(data) >= 1:
+        return GenerateDHKeyComplete(
+            status=data[0],
+            dhkey=bytes(data[1:33]) if len(data) >= 33 else b"",
         )
 
     return None

@@ -1,15 +1,23 @@
 """
 Security Manager pairing, in the responder role.
 
-Implements LE Legacy pairing with the Just Works association model, which is
-what a keyboard with no display and no input can offer. The result is an
-encrypted link, which HID over GATT requires before a host will accept
-input.
+Implements both LE Legacy and LE Secure Connections pairing, in each case
+using the Just Works association model, which is what a keyboard with no
+display and no input can offer. The result is an encrypted link, which HID
+over GATT requires before a host will accept input.
 
-Just Works provides no protection against a man in the middle: the temporary
-key is zero, so an attacker positioned between the two devices during
-pairing can complete it with both. It protects an already-paired session
-from passive eavesdropping, nothing more.
+Secure Connections is used whenever the peer requests it and this device has
+been given the keypair callbacks it needs; only a peer that cannot do SC at
+all falls back to Legacy. This is not a style preference: some hosts, iOS
+included, complete Legacy Just Works pairing and encrypt the link without
+error, but never actually route HID input to the foreground app unless the
+bond was formed with genuine Secure Connections.
+
+Just Works, in either form, provides no protection against a man in the
+middle: the key exchange authenticates nothing about who is on the other
+end, so an attacker positioned between the two devices during pairing can
+complete it with both. It protects an already-paired session from passive
+eavesdropping, nothing more.
 
 After encryption succeeds, the responder key distribution phase hands the
 peer a freshly generated Long Term Key tied to an EDIV/Rand pair. This is
@@ -18,8 +26,8 @@ HID input framework included, gate whether a peripheral is treated as a
 trusted input device on whether a real bond was formed, not merely on
 whether the current session happens to be encrypted. Skipping this leaves a
 peripheral that encrypts correctly and is nonetheless never actually treated
-as a keyboard. Nothing is persisted to disk; the bond exists only for the
-lifetime of the process, so a fresh run still requires re-pairing.
+as a keyboard. This layer only forms the bond; persisting it across runs, so
+a reconnecting host can resume without re-pairing, is `bonds.py`'s job.
 
 All 128-bit values here stay least significant octet first, matching both the
 wire format and the controller's encryption command.
@@ -42,6 +50,8 @@ IDENTITY_INFORMATION = 0x08
 IDENTITY_ADDRESS_INFORMATION = 0x09
 SIGNING_INFORMATION = 0x0A
 SECURITY_REQUEST = 0x0B
+PUBLIC_KEY = 0x0C
+DHKEY_CHECK = 0x0D
 
 # Reasons carried by Pairing Failed.
 FAILED_OOB_NOT_AVAILABLE = 0x02
@@ -52,6 +62,11 @@ FAILED_ENCRYPTION_KEY_SIZE = 0x06
 FAILED_COMMAND_NOT_SUPPORTED = 0x07
 FAILED_UNSPECIFIED_REASON = 0x08
 FAILED_INVALID_PARAMETERS = 0x0A
+FAILED_DHKEY_CHECK_FAILED = 0x0B
+
+# A dummy `r` value for the DHKey Check: nonzero only for Passkey Entry and
+# OOB association, neither of which this device offers.
+_DHKEY_CHECK_R = bytes(16)
 
 # Input and output capabilities. A keyboard peripheral has neither a display
 # nor a way for the user to answer a prompt, so it can only offer Just Works.
@@ -77,6 +92,9 @@ class State(Enum):
     IDLE = auto()
     AWAITING_CONFIRM = auto()
     AWAITING_RANDOM = auto()
+    AWAITING_PUBLIC_KEY = auto()
+    AWAITING_SC_RANDOM = auto()
+    AWAITING_DHKEY_CHECK = auto()
     AWAITING_ENCRYPTION = auto()
     ENCRYPTED = auto()
     FAILED = auto()
@@ -164,11 +182,17 @@ class SecurityManager:
     """
 
     def __init__(self, encrypt, random_bytes, local_address: bytes,
-                 local_address_type: int = 0x00):
+                 local_address_type: int = 0x00,
+                 generate_keypair=None, compute_dhkey=None):
         self._encrypt = encrypt
         self._random_bytes = random_bytes
         self._local_address = bytes(local_address)
         self._local_address_type = local_address_type
+        # Both are None in tests that only exercise the legacy path, which
+        # keeps Secure Connections off regardless of what the peer requests -
+        # there is no keypair to offer it with.
+        self._generate_keypair = generate_keypair
+        self._compute_dhkey = compute_dhkey
 
         self.state = State.IDLE
         self.failure_reason = None
@@ -182,16 +206,49 @@ class SecurityManager:
         self._own_random = b""
         self._short_term_key = None
 
+        self._use_sc = False
+        self._local_public_key = b""
+        self._peer_public_key = b""
+        self._dhkey = b""
+        self._mackey = b""
+        # PDUs a handler needed to send in addition to its own return value.
+        # Only Secure Connections needs this: the responder answers a peer's
+        # Public Key with both its own Public Key and its Pairing Confirm.
+        self._queued_pdus = []
+
     def begin_connection(self, peer_address: bytes, peer_address_type: int):
         """Resets state for a newly connected peer."""
         self.__init__(self._encrypt, self._random_bytes,
-                      self._local_address, self._local_address_type)
+                      self._local_address, self._local_address_type,
+                      self._generate_keypair, self._compute_dhkey)
         self._peer_address = bytes(peer_address)
         self._peer_address_type = peer_address_type
 
     @property
     def short_term_key(self):
         return self._short_term_key
+
+    @property
+    def peer_features(self):
+        """
+        The peer's declared io_capability/auth_req/etc from its Pairing
+        Request, or None before one has arrived. Exposed for host
+        identification (see hostprofile.py); nothing in the pairing logic
+        itself needs this after the exchange completes.
+        """
+        if not self._preq:
+            return None
+        return PairingFeatures.parse(self._preq[1:])
+
+    @property
+    def use_sc(self):
+        return self._use_sc
+
+    def drain_queued_pdus(self):
+        """Returns and clears any extra PDUs a handler queued alongside its reply."""
+        pdus = self._queued_pdus
+        self._queued_pdus = []
+        return pdus
 
     def handle_pdu(self, payload: bytes):
         """Processes one SMP payload, returning the reply to send or None."""
@@ -207,6 +264,10 @@ class SecurityManager:
             return self._handle_pairing_confirm(body)
         if code == PAIRING_RANDOM:
             return self._handle_pairing_random(body)
+        if code == PUBLIC_KEY:
+            return self._handle_public_key(body)
+        if code == DHKEY_CHECK:
+            return self._handle_dhkey_check(body)
         if code == PAIRING_FAILED:
             self.state = State.FAILED
             self.failure_reason = body[0] if body else FAILED_UNSPECIFIED_REASON
@@ -237,29 +298,57 @@ class SecurityManager:
         if features.oob_data_flag:
             return self._fail(FAILED_OOB_NOT_AVAILABLE)
 
-        # A peer insisting on protection against a man in the middle cannot
-        # be satisfied by a device with no display and no input.
-        if features.auth_req & AUTH_REQ_MITM:
-            return self._fail(FAILED_AUTHENTICATION_REQUIREMENTS)
-
+        # A peer may ask for protection against a man in the middle, but that
+        # is only ever a hope, not something it can force: per the IO
+        # capability table, a device with no display and no input can only
+        # ever offer Just Works, regardless of what either side's auth_req
+        # requests. Refusing to pair over an unmet MITM request would be
+        # this responder unilaterally declining something the peer only
+        # asked for optimistically - pairing proceeds with Just Works
+        # instead, which simply does not provide that protection.
         self._preq = bytes(whole_pdu)
 
-        # Secure Connections is deliberately not claimed, which is what makes
-        # the peer fall back to the legacy exchange this implements. Nothing
-        # is requested from the peer, since a keyboard never needs to read
-        # anything back from it, but this responder does distribute its own
-        # EncKey after encryption succeeds, forming a real bond rather than
-        # a session-only encrypted link.
-        response = PairingFeatures(
-            io_capability=IO_CAPABILITY_NO_INPUT_NO_OUTPUT,
-            oob_data_flag=0x00,
-            auth_req=0x00,
-            max_key_size=MAX_ENCRYPTION_KEY_SIZE,
-            initiator_key_distribution=0x00,
-            responder_key_distribution=KEY_DIST_ENC_KEY,
-        )
+        # A responder can only go along with Secure Connections if the peer
+        # asked for it and this device actually has a keypair to offer one
+        # with; a responder can never add SC on its own. Falling back to
+        # Legacy here is what several hosts, iOS included, do NOT treat as a
+        # real bond - Legacy is kept only for peers or environments that
+        # cannot do SC at all.
+        self._use_sc = bool(features.auth_req & AUTH_REQ_SECURE_CONNECTIONS) \
+            and self._generate_keypair is not None
+
+        if self._use_sc:
+            # SC's own key exchange already produces a durable LTK, so no
+            # separate EncKey/MasterID distribution phase is needed or
+            # declared - see `Link._distribute_bond_keys`.
+            response = PairingFeatures(
+                io_capability=IO_CAPABILITY_NO_INPUT_NO_OUTPUT,
+                oob_data_flag=0x00,
+                auth_req=AUTH_REQ_BONDING | AUTH_REQ_SECURE_CONNECTIONS,
+                max_key_size=MAX_ENCRYPTION_KEY_SIZE,
+                initiator_key_distribution=0x00,
+                responder_key_distribution=0x00,
+            )
+        else:
+            # Nothing is requested from the peer, since a keyboard never
+            # needs to read anything back from it, but this responder does
+            # distribute its own EncKey after encryption succeeds, forming a
+            # real bond rather than a session-only encrypted link.
+            response = PairingFeatures(
+                io_capability=IO_CAPABILITY_NO_INPUT_NO_OUTPUT,
+                oob_data_flag=0x00,
+                auth_req=0x00,
+                max_key_size=MAX_ENCRYPTION_KEY_SIZE,
+                initiator_key_distribution=0x00,
+                responder_key_distribution=KEY_DIST_ENC_KEY,
+            )
         self._pres = response.encode(PAIRING_RESPONSE)
-        self.state = State.AWAITING_CONFIRM
+
+        if self._use_sc:
+            self._local_public_key = self._generate_keypair()
+            self.state = State.AWAITING_PUBLIC_KEY
+        else:
+            self.state = State.AWAITING_CONFIRM
         return self._pres
 
     def _handle_pairing_confirm(self, body: bytes):
@@ -276,6 +365,9 @@ class SecurityManager:
         return bytes([PAIRING_CONFIRM]) + confirm
 
     def _handle_pairing_random(self, body: bytes):
+        if self._use_sc:
+            return self._handle_sc_pairing_random(body)
+
         if self.state is not State.AWAITING_RANDOM:
             return self._fail(FAILED_UNSPECIFIED_REASON)
         if len(body) != 16:
@@ -294,6 +386,86 @@ class SecurityManager:
         )
         self.state = State.AWAITING_ENCRYPTION
         return bytes([PAIRING_RANDOM]) + self._own_random
+
+    def _handle_public_key(self, body: bytes):
+        if self.state is not State.AWAITING_PUBLIC_KEY:
+            return self._fail(FAILED_UNSPECIFIED_REASON)
+        if len(body) != 64:
+            return self._fail(FAILED_INVALID_PARAMETERS)
+
+        self._peer_public_key = bytes(body)
+        self._dhkey = self._compute_dhkey(self._peer_public_key)
+        self._own_random = self._random_bytes(16)
+
+        # Just Works is the only association model this device offers, so
+        # the responder can compute and send its confirm immediately, rather
+        # than waiting on a further round trip.
+        confirm = crypto.f4(
+            self._encrypt,
+            self._local_public_key[:32], self._peer_public_key[:32],
+            self._own_random, 0,
+        )
+        self._queued_pdus.append(bytes([PAIRING_CONFIRM]) + confirm)
+
+        self.state = State.AWAITING_SC_RANDOM
+        return bytes([PUBLIC_KEY]) + self._local_public_key
+
+    def _handle_sc_pairing_random(self, body: bytes):
+        if self.state is not State.AWAITING_SC_RANDOM:
+            return self._fail(FAILED_UNSPECIFIED_REASON)
+        if len(body) != 16:
+            return self._fail(FAILED_INVALID_PARAMETERS)
+
+        self._peer_random = bytes(body)
+
+        self._mackey, self._short_term_key = crypto.f5(
+            self._encrypt, self._dhkey,
+            self._peer_random, self._own_random,
+            self._initiator_address(), self._responder_address(),
+        )
+
+        self.state = State.AWAITING_DHKEY_CHECK
+        return bytes([PAIRING_RANDOM]) + self._own_random
+
+    def _handle_dhkey_check(self, body: bytes):
+        if self.state is not State.AWAITING_DHKEY_CHECK:
+            return self._fail(FAILED_UNSPECIFIED_REASON)
+        if len(body) != 16:
+            return self._fail(FAILED_INVALID_PARAMETERS)
+
+        # Verify what the peer (the initiator) sent, using the io_cap it
+        # declared in its own Pairing Request and its own address as a1.
+        expected = crypto.f6(
+            self._encrypt, self._mackey,
+            self._peer_random, self._own_random, _DHKEY_CHECK_R,
+            self._preq[1:4],
+            self._peer_address_with_type(), self._local_address_with_type(),
+        )
+        if bytes(body) != expected:
+            return self._fail(FAILED_DHKEY_CHECK_FAILED)
+
+        own_check = crypto.f6(
+            self._encrypt, self._mackey,
+            self._own_random, self._peer_random, _DHKEY_CHECK_R,
+            self._pres[1:4],
+            self._local_address_with_type(), self._peer_address_with_type(),
+        )
+
+        self.state = State.AWAITING_ENCRYPTION
+        return bytes([DHKEY_CHECK]) + own_check
+
+    def _peer_address_with_type(self) -> bytes:
+        return self._peer_address + bytes([self._peer_address_type])
+
+    def _local_address_with_type(self) -> bytes:
+        return self._local_address + bytes([self._local_address_type])
+
+    def _initiator_address(self) -> bytes:
+        # This responder never initiates, so the initiator is always the peer.
+        return self._peer_address_with_type()
+
+    def _responder_address(self) -> bytes:
+        return self._local_address_with_type()
 
     def long_term_key_for(self, encrypted_diversifier: int, random_number: bytes):
         """
