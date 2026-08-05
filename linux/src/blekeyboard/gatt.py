@@ -160,6 +160,10 @@ class GattServer:
         self.server_mtu = server_mtu
         self.mtu = att.DEFAULT_MTU
         self.encrypted = False
+        # The client's requested MTU, unclamped by server_mtu - unlike `mtu`,
+        # which both sides actually use. Kept only as a host-identification
+        # signal (see hostprofile.py); nothing here should read it for framing.
+        self.client_requested_mtu = None
 
     def handle_pdu(self, pdu: bytes) -> Optional[bytes]:
         """
@@ -188,6 +192,7 @@ class GattServer:
             return att.error_response(opcode, 0x0000, att.ERR_INVALID_PDU)
 
         client_mtu = int.from_bytes(parameters[0:2], "little")
+        self.client_requested_mtu = client_mtu
 
         # Both sides adopt the smaller of the two, and neither may go below
         # the default.
