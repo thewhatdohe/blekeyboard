@@ -29,14 +29,17 @@ def test_collections_are_balanced():
     assert i == len(REPORT_MAP)
 
 
-def test_report_id_matches_the_constant():
-    index = REPORT_MAP.index(_REPORT_ID)
-    assert REPORT_MAP[index + 1] == KEYBOARD_REPORT_ID
+def test_descriptor_declares_no_report_id():
+    # HID over GATT carries the report ID in the Report Reference descriptor,
+    # not as a prefix byte, so the map must not declare one - a leading report
+    # ID byte would be misread as the modifier (and 0x01 as Left Control).
+    assert _REPORT_ID not in REPORT_MAP
+    assert KEYBOARD_REPORT_ID == 0
 
 
-def test_input_report_length_accounts_for_the_report_id_byte():
-    # Report ID + modifier + reserved + six keycodes.
-    assert INPUT_REPORT_LENGTH == 1 + 1 + 1 + 6
+def test_input_report_length_has_no_report_id_byte():
+    # Modifier + reserved + six keycodes, with no report ID prefix.
+    assert INPUT_REPORT_LENGTH == 1 + 1 + 6
 
 
 def test_descriptor_is_well_formed_bytes():
@@ -45,32 +48,32 @@ def test_descriptor_is_well_formed_bytes():
 
 
 class TestBuildInputReport:
-    def test_report_starts_with_the_id_and_modifier(self):
+    def test_report_starts_with_the_modifier(self):
+        # No report ID prefix: the modifier is the very first byte.
         report = build_input_report(modifier=0x02, keycodes=[0x04])
-        assert report[0] == KEYBOARD_REPORT_ID
-        assert report[1] == 0x02
+        assert report[0] == 0x02
 
     def test_reserved_byte_is_always_zero(self):
-        assert build_input_report(modifier=0xFF, keycodes=[0x04])[2] == 0x00
+        assert build_input_report(modifier=0xFF, keycodes=[0x04])[1] == 0x00
 
     def test_report_length_matches_the_wire_constant(self):
         assert len(build_input_report()) == INPUT_REPORT_LENGTH
 
     def test_empty_keycodes_is_the_all_zero_release_report(self):
-        assert build_input_report() == bytes([KEYBOARD_REPORT_ID, 0, 0, 0, 0, 0, 0, 0, 0])
+        assert build_input_report() == bytes([0, 0, 0, 0, 0, 0, 0, 0])
 
     def test_keycodes_are_left_packed_and_padded_with_zero(self):
         report = build_input_report(keycodes=[0x04, 0x05])
-        assert report[3:5] == bytes([0x04, 0x05])
-        assert report[5:] == bytes(4)
+        assert report[2:4] == bytes([0x04, 0x05])
+        assert report[4:] == bytes(4)
 
     def test_maximum_simultaneous_keys_fills_the_array_exactly(self):
         report = build_input_report(keycodes=[1, 2, 3, 4, 5, 6])
-        assert report[3:] == bytes([1, 2, 3, 4, 5, 6])
+        assert report[2:] == bytes([1, 2, 3, 4, 5, 6])
 
     def test_more_than_six_keys_is_rejected(self):
         with pytest.raises(ValueError):
             build_input_report(keycodes=[1, 2, 3, 4, 5, 6, 7])
 
     def test_default_modifier_is_none_pressed(self):
-        assert build_input_report(keycodes=[0x04])[1] == 0x00
+        assert build_input_report(keycodes=[0x04])[0] == 0x00
