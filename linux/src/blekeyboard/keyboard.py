@@ -22,6 +22,7 @@ thread while being read from another.
 import threading
 import time
 
+from blekeyboard.bonds import BondStore
 from blekeyboard.emulator import BLEBroadcaster
 from blekeyboard.gatt import GattServer
 from blekeyboard.hijack import HCITransport
@@ -49,6 +50,7 @@ KEY_HOLD_SECONDS = 0.03
 INTER_CHARACTER_SECONDS = 0.03
 
 
+
 class Keyboard:
     """A BLE HID keyboard, controlled synchronously from a script."""
 
@@ -59,10 +61,16 @@ class Keyboard:
     KEY_ALT = KEY_LEFT_ALT
     KEY_GUI = KEY_LEFT_GUI
 
-    def __init__(self, device_name: str = DEFAULT_DEVICE_NAME, dev_id: int = 0, log=None):
+    def __init__(self, device_name: str = DEFAULT_DEVICE_NAME, dev_id: int = 0, log=None,
+                 bond_store="default"):
         self._device_name = device_name
         self._dev_id = dev_id
         self._log = log or (lambda _message: None)
+
+        # Persist bonds by default so a host reconnecting after a restart
+        # resumes without pairing again. Pass bond_store=None to keep keys
+        # off disk, or a BondStore with a chosen path to place them elsewhere.
+        self._bond_store = BondStore() if bond_store == "default" else bond_store
 
         self._transport = None
         self._link = None
@@ -93,6 +101,7 @@ class Keyboard:
         self._link = Link(
             self._transport, BLEBroadcaster(self._transport), server,
             input_report, self._device_name, log=self._log,
+            bond_store=self._bond_store,
         )
         self._link.initialize()
 
@@ -112,6 +121,16 @@ class Keyboard:
         """Whether a host is currently paired and subscribed to reports."""
         self._check_background_error()
         return self._link is not None and self._link.is_ready
+
+    @property
+    def host_guess(self):
+        """
+        A best-effort HostGuess for the connected peer - see hostprofile.py
+        for exactly what this can and cannot tell you. None before any
+        connection has been attempted.
+        """
+        self._check_background_error()
+        return self._link.host_guess if self._link is not None else None
 
     def disconnect(self):
         """Stops advertising and the background thread, releasing the adapter."""
@@ -156,13 +175,61 @@ class Keyboard:
         self._held_keycodes = []
         self._send_held_state()
 
+    def tap(self, *keys):
+        """
+        Presses a combination and releases it the way a physical keyboard
+        does: one transition at a time, the ordinary keys lifted before the
+        modifiers.
+
+        Releasing a modifier and a key in the same report - clearing the
+        modifier byte and the key array at once - is what several hosts, iOS
+        among them, mishandle, leaving the modifier stuck so that every tap
+        becomes a modifier-click and the host is barely usable. Lifting the
+        keys first, then the modifiers, then sending a final all-clear (twice,
+        so a single dropped report still cannot strand a modifier) mirrors
+        real hardware and releases cleanly.
+        """
+        resolved = [(self._resolve(key), key) for key in keys]
+        modifiers = [key for (bits, code), key in resolved if bits and not code]
+        ordinary = [key for (bits, code), key in resolved if code]
+
+        self.press(*keys)
+        time.sleep(KEY_HOLD_SECONDS)
+        if ordinary:
+            self.release(*ordinary)   # keys up, modifiers still held
+        if modifiers:
+            self.release(*modifiers)  # then the modifiers
+        self.release_all()
+        self.release_all()
+
+    def switch_input_language(self):
+        """
+        Cycles the host's hardware-keyboard input language, for a host whose
+        active layout is not the one a payload was written for.
+
+        A HID keyboard sends physical key positions, not characters, so it
+        can never choose the host's layout itself - iOS ignores the HID
+        country code entirely. What it can do is send the shortcut the host
+        uses to switch: on iOS that is Ctrl+Space, and it only takes effect
+        while a text field is focused. A host sitting on the wrong language
+        (typing, say, Arabic for a US-layout payload) is switched a step at a
+        time, so call this once per language between the target and the one
+        wanted, with a field focused.
+        """
+        self.tap(self.KEY_CTRL, " ")
+
     def write(self, char: str):
         """
         Presses and releases a single character.
 
-        Independent of any combination held through press(): the held state
-        is preserved and restored around this one keystroke, so a script is
-        free to mix write() with press()-held modifiers.
+        The key is pressed with any modifier it needs, then the key is lifted
+        before the modifier, so a modifier is never cleared in the same report
+        as its key - the transition that otherwise strands a modifier on the
+        host and leaves it acting as though a key is held.
+
+        Independent of any combination held through press(): the held state is
+        preserved and restored around this one keystroke, so a script is free
+        to mix write() with press()-held modifiers.
         """
         if len(char) != 1:
             raise ValueError(f"write() takes a single character, got {char!r}.")
@@ -170,10 +237,21 @@ class Keyboard:
         self._check_background_error()
         modifier, keycode = keycode_for_char(char)
         with self._io_lock:
-            if not self._link.send_key_report(self._held_modifier | modifier, [keycode]):
-                raise RuntimeError("No host is currently connected and subscribed.")
+            combined = self._held_modifier | modifier
+
+            self._require_sent(combined, self._held_keycodes + [keycode])
             time.sleep(KEY_HOLD_SECONDS)
+
+            # Key up while the modifier is still held, then back to the held
+            # state, so a modifier is never cleared in the same report as its
+            # key - the transition that otherwise strands it on the host.
+            if modifier & ~self._held_modifier:
+                self._link.send_key_report(combined, self._held_keycodes)
             self._link.send_key_report(self._held_modifier, self._held_keycodes)
+
+    def _require_sent(self, modifier, keycodes):
+        if not self._link.send_key_report(modifier, keycodes):
+            raise RuntimeError("No host is currently connected and subscribed.")
 
     def print(self, text: str):
         """Types a string one character at a time via write()."""
@@ -204,6 +282,23 @@ class Keyboard:
             if not self._link.send_key_report(self._held_modifier, self._held_keycodes):
                 raise RuntimeError("No host is currently connected and subscribed.")
 
+    def _reassert_on_ready(self, was_ready: bool) -> bool:
+        """
+        Re-sends the intended key state each time the host becomes ready.
+
+        Called with the caller's lock already held. On a first connection or
+        a reconnect resuming a bond, the host and this side must agree on what
+        is held. Normally nothing is, so this sends an all-keys-up report that
+        clears any key the host still believes is down from before a drop or a
+        disconnect; if a combination is deliberately held, it re-presses it.
+        Returns the current readiness, for the caller to carry into the next
+        check.
+        """
+        ready = self._link.is_ready
+        if ready and not was_ready:
+            self._link.send_key_report(self._held_modifier, self._held_keycodes)
+        return ready
+
     def _run(self):
         """
         Background loop: pumps packets and sends the periodic keepalive.
@@ -216,12 +311,15 @@ class Keyboard:
         at a script that has quietly stopped doing anything.
         """
         last_keepalive = time.time()
+        was_ready = False
         while not self._stop.is_set():
             try:
                 with self._io_lock:
                     packet = self._transport.read_packet(timeout_ms=200)
                     if packet:
                         self._link.pump(packet)
+
+                    was_ready = self._reassert_on_ready(was_ready)
 
                     if time.time() - last_keepalive >= 10.0:
                         self._link.send_keepalive()

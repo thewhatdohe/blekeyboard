@@ -56,7 +56,9 @@ class FakeHCITransport:
 @pytest.fixture
 def keyboard(monkeypatch):
     monkeypatch.setattr("blekeyboard.keyboard.HCITransport", FakeHCITransport)
-    return Keyboard()
+    # No bond store, so the background thread never touches the real state
+    # directory; bond persistence has its own tests.
+    return Keyboard(bond_store=None)
 
 
 class TestConnectLifecycle:
