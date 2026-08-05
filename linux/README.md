@@ -6,9 +6,9 @@ See [`../windows`](../windows) for the Windows implementation. The HCI packet co
 
 ## Project status
 
-Alpha, and currently ahead of the Windows implementation. The full stack is implemented and verified against real hardware: the controller is claimed, reset and configured, advertises as a discoverable HID keyboard, is paired through the host operating system's own Bluetooth settings, enrols as a keyboard via HID over GATT, and delivers key reports over the encrypted link. Decoding a captured session against the US layout table confirms every keystroke arrives correctly formed.
+Alpha, and currently the only functional implementation - the Windows package is an early transport-layer prototype and cannot yet pair or type. The full stack is implemented and verified against real hardware: the controller is claimed, reset and configured, advertises as a discoverable HID keyboard, is paired through the host operating system's own Bluetooth settings, enrols as a keyboard via HID over GATT, and delivers key reports over the encrypted link. This has been confirmed end to end on iOS, including actual on-screen typing, not just a successfully encrypted link.
 
-Pairing implements LE Legacy with the Just Works association model, the only one available to a device with no display and no keypad. It leaves an established session safe from passive eavesdropping but offers no protection against an attacker present during pairing. Keys are not retained, so each connection pairs again. AES is performed by the controller through the LE Encrypt command, which is what allows the implementation to stay free of a cryptography dependency.
+Pairing implements both LE Legacy and LE Secure Connections, both restricted to the Just Works association model - the only one available to a device with no display and no keypad. Whichever a peer offers is used automatically; SC is preferred when available and is what several hosts, iOS included, require before treating the peripheral as a genuinely trusted input device rather than merely an encrypted one. The ECDH key agreement SC needs runs in pure Python rather than through the controller's own P-256/DHKey commands, since at least one common controller wedges its command queue partway through that exchange; AES still runs through the controller's LE Encrypt command. Neither adds a runtime dependency. A formed bond is persisted to `~/.local/state/blekeyboard/bonds.json` (owner-readable only), so a host reconnecting after this process restarts resumes the encrypted session without pairing again.
 
 A host will always prompt to confirm pairing with a new device before accepting input from it; this is a platform-level gate BLE HID has no way around. See the [project roadmap](../README.md#roadmap) and the BLE injection limitation noted there.
 
@@ -16,7 +16,7 @@ A host will always prompt to confirm pairing with a new device before accepting 
 
 Windows requires replacing the vendor driver with WinUSB to reach the controller. Linux exposes equivalent access natively through BlueZ's HCI user channel: binding an `AF_BLUETOOTH` / `BTPROTO_HCI` socket with `HCI_CHANNEL_USER` grants exclusive raw HCI command and event access, detaching the adapter from `bluetoothd` and the kernel Bluetooth stack for as long as the socket remains open.
 
-As a result, the Linux implementation has no external dependencies and communicates with the adapter using only the Python standard library `socket` module.
+As a result, the Linux implementation has no external dependencies and communicates with the adapter using only the Python standard library (`socket` for the transport, `secrets` for cryptographic randomness).
 
 ## Requirements
 
@@ -25,6 +25,12 @@ As a result, the Linux implementation has no external dependencies and communica
 - `CAP_NET_ADMIN`, granted either by running as root or by assigning the capability to the interpreter
 
 ## Installation
+
+```bash
+pip install blekeyboard
+```
+
+For a local checkout instead:
 
 ```bash
 pip install -e .
@@ -53,10 +59,13 @@ Run as root:
 sudo python3 -m blekeyboard
 ```
 
-Alternatively, grant the capability to the interpreter to avoid running the process fully privileged:
+Alternatively, grant the capability to the interpreter to avoid running the process fully privileged. Do this against a virtual environment's own interpreter, not a shared system Python: `setcap` targets a specific binary, and a venv created with `--copies` (not the default symlink) gets its own physical copy, so the grant does not extend to every other script that Python ever runs.
 
 ```bash
-sudo setcap cap_net_admin+eip $(readlink -f $(which python3))
+python3 -m venv --copies ~/.venvs/blekeyboard
+~/.venvs/blekeyboard/bin/pip install blekeyboard
+sudo setcap cap_net_admin+eip ~/.venvs/blekeyboard/bin/python3
+~/.venvs/blekeyboard/bin/python3 -m blekeyboard
 ```
 
 ### Command line
@@ -65,7 +74,7 @@ sudo setcap cap_net_admin+eip $(readlink -f $(which python3))
 sudo python -m blekeyboard
 ```
 
-Advertises as a keyboard, waits for a host to pair and subscribe to notifications, then prompts for Enter before typing a demonstration string. Holds the adapter until interrupted with `Ctrl+C`.
+Advertises as a keyboard and waits for a host to pair and subscribe, then drops into an interactive prompt: `Enter` types a demonstration string, `t <text>` types anything else, `run <path>` runs a Ducky Script file, `who` prints a best-effort guess at the connected host's OS, `l` sends the iOS input-language-switch shortcut, and `r` releases every key (useful if a host still believes one is held after a dropped notification). Holds the adapter until interrupted with `Ctrl+C`.
 
 ### Scripting API
 
@@ -95,6 +104,33 @@ keyboard.print("notepad\n")
 | `Keyboard.release_all()` | Releases every held key. |
 | `Keyboard.write(char)` | Presses and releases a single character, preserving any keys held via `press()`. |
 | `Keyboard.print(text)` / `Keyboard.type(text)` | Types a string one character at a time. |
+| `Keyboard.tap(*keys)` | Presses a combination, then releases it the way physical hardware sequences a keystroke - ordinary keys before modifiers - so a dropped notification can't strand a modifier on the host. |
+| `Keyboard.switch_input_language()` | Sends Ctrl+Space, the iOS shortcut to cycle the hardware-keyboard input language. A HID keyboard can only send key positions, never choose the host's layout - iOS ignores the HID country code entirely - so this is the only lever available when the host's active layout doesn't match the payload. |
+| `Keyboard.host_guess` | A best-effort `HostGuess` for the connected peer - see [Host detection](#host-detection) below. `None` before any connection. |
+
+### Ducky Script
+
+A second, deliberately restricted input syntax alongside the scripting API above, styled after the USB Rubber Ducky's payload format:
+
+```python
+from blekeyboard import Keyboard, run_duckyscript
+
+keyboard = Keyboard()
+keyboard.connect()
+
+run_duckyscript(keyboard, """
+    REM opens a run dialog and types a command
+    STRINGLN notepad.exe
+    DELAY 500
+    STRING done
+""")
+```
+
+Supported, one command per line: `STRING`/`STRINGLN <text>`, `DELAY <milliseconds>`, `REM <comment>`, and single named keys on their own line (`ENTER`, `TAB`, `ESCAPE`, the arrow keys, `F1`-`F12`, and similar). Key combinations (`GUI r`, `CTRL ALT DEL`) and a key held across lines (`HOLD`/`RELEASE`) are not implemented yet; a line naming one raises `DuckyScriptError` rather than being silently misinterpreted. `run_duckyscript_file(keyboard, path)` reads and runs a script from disk - this is what the CLI's `run <path>` command uses.
+
+### Host detection
+
+`Keyboard.host_guess` returns a `HostGuess` - a `HostOS` (`IOS`, `ANDROID`, `WINDOWS`, `MACOS`, `LINUX`, or `UNKNOWN`), a `confidence` (`"none"`, `"low"`, or `"medium"`, deliberately never higher), and `reasons` explaining the guess. This is necessarily a hint, not a fact: BLE has no field where a central announces its operating system, so this is inferred from a handful of observable signals during pairing (the peer's address type and its Pairing Request's `auth_req`/CT2 pattern) cross-referenced against per-platform tendencies this project has actually observed. Windows, Linux and macOS are not yet distinguishable from each other and are reported as `UNKNOWN` rather than guessed at random.
 
 ### Low-level API
 
