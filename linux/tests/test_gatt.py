@@ -110,6 +110,18 @@ class TestMtuExchange:
         assert response[0] == att.ERROR_RESPONSE
         assert response[4] == att.ERR_INVALID_PDU
 
+    def test_client_requested_mtu_is_kept_unclamped(self, server):
+        # A host-identification signal (see hostprofile.py) needs the raw
+        # value the client asked for, not the negotiated `mtu`, which a small
+        # server_mtu could otherwise clamp away entirely.
+        server.server_mtu = 23
+        server.handle_pdu(bytes([att.EXCHANGE_MTU_REQUEST]) + (527).to_bytes(2, "little"))
+        assert server.client_requested_mtu == 527
+        assert server.mtu == 23
+
+    def test_client_requested_mtu_is_none_before_any_exchange(self, server):
+        assert server.client_requested_mtu is None
+
 
 class TestServiceDiscovery:
     def test_primary_services_are_returned_with_their_ranges(self, server):
