@@ -230,6 +230,41 @@ class TestModifierAliases:
         assert Keyboard.KEY_GUI == kc.KEY_LEFT_GUI
 
 
+class TestNamedKeyAliases:
+    """
+    Non-modifier keys with no character of their own - Keyboard.KEY_ENTER
+    and similar - so a script can write Keyboard.KEY_ENTER instead of
+    importing the keycodes module separately just to name one key.
+    """
+
+    def test_common_named_keys_match_the_keycodes_module(self):
+        assert Keyboard.KEY_ENTER == kc.KEY_ENTER
+        assert Keyboard.KEY_ESCAPE == kc.KEY_ESCAPE
+        assert Keyboard.KEY_BACKSPACE == kc.KEY_BACKSPACE
+        assert Keyboard.KEY_TAB == kc.KEY_TAB
+        assert Keyboard.KEY_SPACE == kc.KEY_SPACE
+        assert Keyboard.KEY_DELETE == kc.KEY_DELETE
+
+    def test_arrow_keys_match_the_keycodes_module(self):
+        assert Keyboard.KEY_UP_ARROW == kc.KEY_UP_ARROW
+        assert Keyboard.KEY_DOWN_ARROW == kc.KEY_DOWN_ARROW
+        assert Keyboard.KEY_LEFT_ARROW == kc.KEY_LEFT_ARROW
+        assert Keyboard.KEY_RIGHT_ARROW == kc.KEY_RIGHT_ARROW
+
+    def test_all_twelve_function_keys_match_the_keycodes_module(self):
+        for n in range(1, 13):
+            assert getattr(Keyboard, f"KEY_F{n}") == getattr(kc, f"KEY_F{n}")
+
+    def test_function_keys_are_contiguous(self):
+        assert [Keyboard.KEY_F1 + i for i in range(12)] == \
+            [getattr(Keyboard, f"KEY_F{n}") for n in range(1, 13)]
+
+    def test_tap_with_the_enter_alias_sends_the_enter_keycode(self):
+        keyboard = make_keyboard()
+        keyboard.tap(Keyboard.KEY_ENTER)
+        assert keyboard._link.reports[0] == (0, (kc.KEY_ENTER,))
+
+
 class TestHostGuess:
     def test_none_before_any_connection_attempt(self):
         assert Keyboard(bond_store=None).host_guess is None
