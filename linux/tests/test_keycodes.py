@@ -91,6 +91,15 @@ class TestCoverage:
             kc.keycode_for_char("\r")
 
 
+class TestFunctionKeys:
+    def test_f1_through_f12_are_contiguous_from_f1(self):
+        for n in range(1, 13):
+            assert getattr(kc, f"KEY_F{n}") == kc.KEY_F1 + (n - 1)
+
+    def test_f12_does_not_collide_with_print_screen(self):
+        assert kc.KEY_F12 < kc.KEY_PRINT_SCREEN
+
+
 class TestModifierBits:
     def test_each_modifier_keycode_maps_to_its_bit(self):
         assert kc.modifier_bit_for(kc.KEY_LEFT_CTRL) == kc.MOD_LEFT_CTRL

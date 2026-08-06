@@ -27,10 +27,41 @@ from blekeyboard.emulator import BLEBroadcaster
 from blekeyboard.gatt import GattServer
 from blekeyboard.hijack import HCITransport
 from blekeyboard.keycodes import (
+    KEY_BACKSPACE,
+    KEY_CAPS_LOCK,
+    KEY_DELETE,
+    KEY_DOWN_ARROW,
+    KEY_END,
+    KEY_ENTER,
+    KEY_ESCAPE,
+    KEY_F1,
+    KEY_F2,
+    KEY_F3,
+    KEY_F4,
+    KEY_F5,
+    KEY_F6,
+    KEY_F7,
+    KEY_F8,
+    KEY_F9,
+    KEY_F10,
+    KEY_F11,
+    KEY_F12,
+    KEY_HOME,
+    KEY_INSERT,
     KEY_LEFT_ALT,
+    KEY_LEFT_ARROW,
     KEY_LEFT_CTRL,
     KEY_LEFT_GUI,
     KEY_LEFT_SHIFT,
+    KEY_PAGE_DOWN,
+    KEY_PAGE_UP,
+    KEY_PAUSE,
+    KEY_PRINT_SCREEN,
+    KEY_RIGHT_ARROW,
+    KEY_SCROLL_LOCK,
+    KEY_SPACE,
+    KEY_TAB,
+    KEY_UP_ARROW,
     keycode_for_char,
     modifier_bit_for,
 )
@@ -60,6 +91,43 @@ class Keyboard:
     KEY_SHIFT = KEY_LEFT_SHIFT
     KEY_ALT = KEY_LEFT_ALT
     KEY_GUI = KEY_LEFT_GUI
+
+    # Non-modifier named keys with no character of their own, re-exported
+    # from keycodes.py so a script can write Keyboard.KEY_ENTER instead of
+    # importing the keycodes module separately just to name one key. tap()
+    # is the method meant for these - it presses and releases cleanly,
+    # unlike press(), which holds a key until a separate release() call.
+    KEY_ENTER = KEY_ENTER
+    KEY_ESCAPE = KEY_ESCAPE
+    KEY_BACKSPACE = KEY_BACKSPACE
+    KEY_TAB = KEY_TAB
+    KEY_SPACE = KEY_SPACE
+    KEY_CAPS_LOCK = KEY_CAPS_LOCK
+    KEY_PRINT_SCREEN = KEY_PRINT_SCREEN
+    KEY_SCROLL_LOCK = KEY_SCROLL_LOCK
+    KEY_PAUSE = KEY_PAUSE
+    KEY_INSERT = KEY_INSERT
+    KEY_HOME = KEY_HOME
+    KEY_PAGE_UP = KEY_PAGE_UP
+    KEY_DELETE = KEY_DELETE
+    KEY_END = KEY_END
+    KEY_PAGE_DOWN = KEY_PAGE_DOWN
+    KEY_RIGHT_ARROW = KEY_RIGHT_ARROW
+    KEY_LEFT_ARROW = KEY_LEFT_ARROW
+    KEY_DOWN_ARROW = KEY_DOWN_ARROW
+    KEY_UP_ARROW = KEY_UP_ARROW
+    KEY_F1 = KEY_F1
+    KEY_F2 = KEY_F2
+    KEY_F3 = KEY_F3
+    KEY_F4 = KEY_F4
+    KEY_F5 = KEY_F5
+    KEY_F6 = KEY_F6
+    KEY_F7 = KEY_F7
+    KEY_F8 = KEY_F8
+    KEY_F9 = KEY_F9
+    KEY_F10 = KEY_F10
+    KEY_F11 = KEY_F11
+    KEY_F12 = KEY_F12
 
     def __init__(self, device_name: str = DEFAULT_DEVICE_NAME, dev_id: int = 0, log=None,
                  bond_store="default"):
