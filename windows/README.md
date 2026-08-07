@@ -8,6 +8,8 @@ See [`../linux`](../linux) for the Linux implementation. The HCI packet construc
 
 Alpha. Advertising is implemented: the controller is claimed, reset, configured, and broadcasts a discoverable device name. The GATT, pairing, and HID layers are in development, so a connecting device will find no services and cannot receive keystrokes. See the [project roadmap](../README.md#roadmap).
 
+`from blekeyboard import Keyboard` exists only as a placeholder here: constructing it raises `NotImplementedError` with a pointer to this file, rather than the bare `ImportError` an empty package would give someone expecting the same API the Linux package provides. Use `USBTransport`/`BLEBroadcaster` directly, as shown below, for what actually works today.
+
 Tested on Windows 10.
 
 ## How it works
