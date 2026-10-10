@@ -6,7 +6,7 @@ Intended for authorized penetration testing and red team engagements, as a scrip
 
 ## Project status
 
-Alpha. On Linux, the full stack — advertising, connection handling, pairing, GATT/HID over GATT services, and key report delivery — is implemented and verified against real hardware: a phone paired through its own Bluetooth settings, enrolled the device as a keyboard, and received correctly encoded keystrokes over an encrypted link. Windows has the advertising layer only; see [Roadmap](#roadmap).
+Alpha. On Linux the full stack works: advertising, connection handling, pairing, GATT/HID over GATT services, and key report delivery, all verified against real hardware. A phone paired through its own Bluetooth settings, enrolled the device as a keyboard, and received correctly encoded keystrokes over an encrypted link. Windows only has the advertising layer so far, see [Roadmap](#roadmap).
 
 | Capability | Windows | Linux |
 | --- | --- | --- |
@@ -20,14 +20,14 @@ Alpha. On Linux, the full stack — advertising, connection handling, pairing, G
 | HID over GATT services | Planned | Supported |
 | Key report delivery | Planned | Supported |
 | Scripting API (`Keyboard`) | Planned | Supported |
-| Payload script runner | Planned | Planned |
-| Persistent bonding | Planned | Planned |
+| Payload script runner | Planned | Supported |
+| Persistent bonding | Planned | Supported |
 
-Pairing uses the Just Works association model, the only one available to a device with no display and no keypad. It protects an established session from passive eavesdropping but not from an attacker present during pairing itself. Keys are not retained, so each connection pairs afresh.
+Pairing uses the Just Works association model, the only one available to a device with no display and no keypad. It protects an established session from passive eavesdropping, not from an attacker present during pairing itself. On Linux the bond is saved to disk, so a host reconnecting later resumes the encrypted session instead of pairing again.
 
 ### A real limitation of BLE injection
 
-Unlike a wired USB "BadUSB" device, which is auto-enumerated the instant it is plugged in, BLE HID has no equivalent. The target's operating system will always prompt to confirm pairing with a new device before accepting input from it — even with no PIN involved, that confirmation is a platform-level gate this tool cannot bypass. This makes `blekeyboard` suited to engagements involving physical access and a plausible pretext for pairing a new peripheral, not silent drive-by injection.
+Unlike a wired USB "BadUSB" device, which gets auto-enumerated the instant it's plugged in, BLE HID has no equivalent. The target's OS will always prompt to confirm pairing with a new device before it accepts any input, even with no PIN involved. That confirmation is a platform-level gate this tool can't get around. So `blekeyboard` fits engagements with physical access and a plausible pretext for pairing a new peripheral, not silent drive-by injection.
 
 ## Roadmap
 
@@ -39,7 +39,7 @@ HID over GATT requires a host-side protocol stack above the HCI layer:
 - [x] Security Manager pairing and link encryption, which HID hosts require before accepting input
 - [x] HID over GATT Profile services and report descriptors
 - [x] Key report transmission and a `Keyboard` scripting API
-- [ ] A payload script runner for semicolon-delimited command strings
+- [x] A restricted Ducky Script interpreter for payload delivery
 
 ## Repository layout
 

@@ -6,7 +6,7 @@ See [`../linux`](../linux) for the Linux implementation. The HCI packet construc
 
 ## Project status
 
-Alpha. Advertising is implemented: the controller is claimed, reset, configured, and broadcasts a discoverable device name. The GATT, pairing, and HID layers are in development, so a connecting device will find no services and cannot receive keystrokes. See the [project roadmap](../README.md#roadmap).
+Alpha. Advertising is implemented: the controller is claimed, reset, configured, and broadcasts a discoverable device name. The GATT, pairing, and HID layers are still in development, so a connecting device finds no services and can't receive keystrokes. See the [project roadmap](../README.md#roadmap).
 
 `from blekeyboard import Keyboard` exists only as a placeholder here: constructing it raises `NotImplementedError` with a pointer to this file, rather than the bare `ImportError` an empty package would give someone expecting the same API the Linux package provides. Use `USBTransport`/`BLEBroadcaster` directly, as shown below, for what actually works today.
 
@@ -14,9 +14,9 @@ Tested on Windows 10.
 
 ## How it works
 
-Windows does not permit applications to act as BLE peripherals or to reach the controller's HID capabilities directly. Replacing the vendor driver with a generic USB driver exposes the adapter's HCI endpoints, allowing BLE configuration to be driven from Python.
+Windows doesn't let applications act as BLE peripherals or reach the controller's HID capabilities directly. Replacing the vendor driver with a generic USB driver exposes the adapter's HCI endpoints, so BLE configuration can be driven from Python instead.
 
-Peripheral support is dependent on hardware and driver capability and is not available on all systems.
+Peripheral support depends on hardware and driver capability, and isn't available on every system.
 
 ## Requirements
 
@@ -29,7 +29,7 @@ Primarily tested against Realtek (RTL88xx) and Intel (AX2xx) adapters, which cov
 
 ### 1. Replace the adapter driver
 
-The library cannot reach the controller until the vendor driver is replaced with WinUSB. This suspends normal Bluetooth functionality, including connected peripherals such as mice and headsets, until the original driver is restored.
+The library can't reach the controller until the vendor driver is replaced with WinUSB. This suspends normal Bluetooth functionality, including connected peripherals such as mice and headsets, until the original driver is restored.
 
 1. Download [Zadig](https://zadig.akeo.ie/).
 2. Enable **Options → List All Devices**.
