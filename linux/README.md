@@ -6,7 +6,7 @@ See [`../windows`](../windows) for the Windows implementation. The HCI packet co
 
 ## Project status
 
-Alpha, and currently ahead of the Windows implementation. Verified against real hardware: the controller is claimed, reset and configured, advertises a discoverable name, accepts an incoming connection, and reassembles the L2CAP frames the peer sends. The GATT, pairing and HID layers are in development, so a connecting device will find no services and cannot receive keystrokes. See the [project roadmap](../README.md#roadmap).
+Alpha, and currently ahead of the Windows implementation. Verified against real hardware: the controller is claimed, reset and configured, advertises a discoverable name, accepts an incoming connection, and serves a GATT attribute table that a client can discover and read. The pairing and HID layers are in development, so a connected device cannot yet receive keystrokes. See the [project roadmap](../README.md#roadmap).
 
 ## How it works
 
