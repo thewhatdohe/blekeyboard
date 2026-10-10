@@ -65,6 +65,15 @@ class ConnectionComplete:
     # The address as it arrived, least significant octet first. Pairing mixes
     # it into the confirm value in exactly this order.
     peer_address_raw: bytes = b""
+    # Connection interval in units of 1.25ms. Negotiated by the central, not
+    # something this peripheral requests; worth surfacing since it bounds how
+    # often a report can actually reach the air, regardless of how fast this
+    # side calls send_acl_payload.
+    interval_units: int = 0
+
+    @property
+    def interval_ms(self) -> float:
+        return self.interval_units * 1.25
 
 
 @dataclass
@@ -254,6 +263,9 @@ def _parse_le_meta(subevent: int, data: bytes):
             peer_address_type=data[4],
             peer_address=format_address(data[5:11]),
             peer_address_raw=bytes(data[5:11]),
+            # Interval follows the peer address in both the legacy and
+            # enhanced forms; only absent if the event were truncated.
+            interval_units=_u16(data, 11) if len(data) >= 13 else 0,
         )
 
     if subevent == LE_LONG_TERM_KEY_REQUEST and len(data) >= 12:
