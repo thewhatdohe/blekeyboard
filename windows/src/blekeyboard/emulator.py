@@ -1,4 +1,3 @@
-import time
 from typing import List
 from blekeyboard.hijack import USBTransport
 
@@ -6,13 +5,16 @@ class BLEBroadcaster:
     """
     Constructs Bluetooth Host Controller Interface (HCI) commands.
     """
-    
+
     # OGF stands for Opcode Group Field. It categorizes what part of the Bluetooth chip we want to talk to.
     # 0x08 tells the chip we are sending Bluetooth Low Energy (LE) specific commands.
     OGF_LE_CONTROLLER = 0x08
-    
+
     # 0x04 tells the chip we are asking for informational data (like firmware versions or MAC addresses).
     OGF_INFORMATIONAL = 0x04
+
+    # 0x03 covers controller and baseband control, such as resetting the chip.
+    OGF_CONTROLLER_BASEBAND = 0x03
 
     def __init__(self, transport: USBTransport):
         self.transport = transport
@@ -35,12 +37,27 @@ class BLEBroadcaster:
         # Merge the 3-byte header with our actual payload data array and return it.
         return header + data
 
+    def reset_controller(self):
+        """Resets the controller to a known state."""
+        # A freshly claimed controller is uninitialized, so the spec expects an
+        # HCI Reset before any other command. OCF 0x0003 under the Controller &
+        # Baseband OGF is "Reset".
+        packet = self._build_hci_packet(ocf=0x0003, ogf=self.OGF_CONTROLLER_BASEBAND, data=[])
+        self.transport.send_control_packet(packet)
+
     def configure_advertising(self, interval_ms: int = 800):
         """Initializes standard ADV_IND Link Layer parameters."""
         # BLE radio timing is measured in "slots" of 0.625 milliseconds.
         # Dividing our milliseconds by 0.625 converts it into the slot count the chip understands.
         slots = int(interval_ms / 0.625)
-        
+
+        # The spec only accepts slot counts from 0x0020 to 0x4000 (20ms to 10240ms).
+        # Outside that range the controller rejects the command, so fail loudly here instead.
+        if not 0x0020 <= slots <= 0x4000:
+            raise ValueError(
+                f"Advertising interval must be between 20ms and 10240ms (got {interval_ms}ms)."
+            )
+
         # The slot count is often too big for a single byte (max 255).
         # So we split the 16-bit slot integer into two 8-bit bytes (low byte and high byte).
         slots_low = slots & 0xFF
@@ -63,7 +80,7 @@ class BLEBroadcaster:
         self.transport.send_control_packet(packet)
 
     def set_advertising_payload(self, name: str):
-        """Constructs an Extended Inquiry Response advertising payload."""
+        """Constructs the LE advertising data payload (flags plus complete local name)."""
         # Convert our string name (e.g., "blekeyboard") into raw numerical bytes.
         name_bytes = name.encode('utf-8')
         
@@ -101,16 +118,6 @@ class BLEBroadcaster:
         
         # OCF 0x000A is the official Bluetooth spec code for "LE Set Advertise Enable".
         packet = self._build_hci_packet(ocf=0x000A, ogf=self.OGF_LE_CONTROLLER, data=state_byte)
-        self.transport.send_control_packet(packet)
-
-    def set_tx_power(self, power_dbm: int):
-        """Sets the LE advertising transmit power level."""
-        # NOTE: Check if your hardware requires vendor-specific commands (VS)
-        # Standard legacy HCI usually sets TX power inside the advertising parameters packet (OCF 0x0006)
-        # If using OCF 0x000F, verify your controller supports it as a SET command (rare)
-        
-        power_byte = [(power_dbm & 0xFF)]
-        packet = self._build_hci_packet(ocf=0x000F, ogf=self.OGF_LE_CONTROLLER, data=power_byte)
         self.transport.send_control_packet(packet)
 
     def send_keepalive_ping(self):
