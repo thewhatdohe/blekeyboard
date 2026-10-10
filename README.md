@@ -13,22 +13,24 @@ Alpha. The BLE advertising layer is implemented and verified against real hardwa
 | Raw HCI transport | Supported | Supported |
 | Controller reset and configuration | Supported | Supported |
 | Connectable advertising | Supported | Supported |
+| Connection lifecycle events | Planned | Supported |
+| L2CAP data transport | Planned | Supported |
 | GATT server | Planned | Planned |
 | Pairing and bonding | Planned | Planned |
 | HID keyboard input | Planned | Planned |
 
-A device scanning nearby will discover the advertised peripheral. Because the GATT and HID layers are not yet present, a connecting device will find no services and cannot receive keystrokes.
+Linux development is currently ahead of Windows. A connecting device is accepted and its requests are received, but because the GATT and HID layers are not yet present it will find no services and cannot receive keystrokes.
 
 ## Roadmap
 
-HID over GATT requires a host-side protocol stack above the current HCI layer:
+HID over GATT requires a host-side protocol stack above the HCI layer:
 
-1. Connection lifecycle handling (HCI event mask, connection and disconnection events)
-2. ACL data transport with L2CAP fragmentation and reassembly
-3. ATT protocol and a GATT attribute server
-4. Security Manager pairing and link encryption, which HID hosts require before accepting input
-5. HID over GATT Profile services and report descriptors
-6. Key report transmission
+- [x] Connection lifecycle handling (HCI event mask, connection and disconnection events)
+- [x] ACL data transport with L2CAP fragmentation and reassembly
+- [ ] ATT protocol and a GATT attribute server
+- [ ] Security Manager pairing and link encryption, which HID hosts require before accepting input
+- [ ] HID over GATT Profile services and report descriptors
+- [ ] Key report transmission
 
 ## Repository layout
 
