@@ -1,20 +1,20 @@
 import time
 from typing import List
-from blekeyboard.hijack import USBTransport
+from blekeyboard.hijack import HCITransport
 
 class BLEBroadcaster:
     """
     Constructs Bluetooth Host Controller Interface (HCI) commands.
     """
-    
+
     # OGF stands for Opcode Group Field. It categorizes what part of the Bluetooth chip we want to talk to.
     # 0x08 tells the chip we are sending Bluetooth Low Energy (LE) specific commands.
     OGF_LE_CONTROLLER = 0x08
-    
+
     # 0x04 tells the chip we are asking for informational data (like firmware versions or MAC addresses).
     OGF_INFORMATIONAL = 0x04
 
-    def __init__(self, transport: USBTransport):
+    def __init__(self, transport: HCITransport):
         self.transport = transport
 
     def _build_hci_packet(self, ocf: int, ogf: int, data: List[int] = None) -> List[int]:
@@ -101,6 +101,16 @@ class BLEBroadcaster:
         
         # OCF 0x000A is the official Bluetooth spec code for "LE Set Advertise Enable".
         packet = self._build_hci_packet(ocf=0x000A, ogf=self.OGF_LE_CONTROLLER, data=state_byte)
+        self.transport.send_control_packet(packet)
+
+    def set_tx_power(self, power_dbm: int):
+        """Sets the LE advertising transmit power level."""
+        # NOTE: Check if your hardware requires vendor-specific commands (VS)
+        # Standard legacy HCI usually sets TX power inside the advertising parameters packet (OCF 0x0006)
+        # If using OCF 0x000F, verify your controller supports it as a SET command (rare)
+        
+        power_byte = [(power_dbm & 0xFF)]
+        packet = self._build_hci_packet(ocf=0x000F, ogf=self.OGF_LE_CONTROLLER, data=power_byte)
         self.transport.send_control_packet(packet)
 
     def send_keepalive_ping(self):
