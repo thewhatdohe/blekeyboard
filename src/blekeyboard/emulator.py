@@ -3,7 +3,9 @@ from typing import List
 from blekeyboard.hijack import USBTransport
 
 class BLEBroadcaster:
-    """Constructs specification-compliant BLE HCI command structures over raw USB."""
+    """
+    Constructs Bluetooth Host Controller Interface (HCI) commands.
+    """
     
     OGF_LE_CONTROLLER = 0x08
     OGF_INFORMATIONAL = 0x04
@@ -12,38 +14,39 @@ class BLEBroadcaster:
         self.transport = transport
 
     def _build_hci_packet(self, ocf: int, ogf: int, data: List[int] = None) -> List[int]:
+        """Assembles an HCI command packet header."""
         data = data or []
         opcode = (ogf << 10) | ocf
         header = [opcode & 0xFF, (opcode >> 8) & 0xFF, len(data)]
         return header + data
 
     def configure_advertising(self, interval_ms: int = 800):
-        """Sets up ADV_IND parameters (Connectable undirected advertising)."""
+        """Initializes standard ADV_IND Link Layer parameters."""
         slots = int(interval_ms / 0.625)
         slots_low = slots & 0xFF
         slots_high = (slots >> 8) & 0xFF
         
         params = [
-            slots_low, slots_high,  # Min interval
-            slots_low, slots_high,  # Max interval
-            0x00,                    # Connectable undirected (ADV_IND)
-            0x00,                    # Own Address Type: Public
-            0x00,                    # Peer Address Type: Public
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, # Peer Address
-            0x07,                    # Channel Map: 37, 38, 39
-            0x00                     # Filter Policy: Allow all
+            slots_low, slots_high,
+            slots_low, slots_high,
+            0x00,
+            0x00,
+            0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x07,
+            0x00
         ]
         packet = self._build_hci_packet(ocf=0x0006, ogf=self.OGF_LE_CONTROLLER, data=params)
         self.transport.send_control_packet(packet)
 
     def set_advertising_payload(self, name: str):
-        """Encapsulates string data into an EIR/AD structure frame."""
+        """Constructs an Extended Inquiry Response advertising payload."""
         name_bytes = name.encode('utf-8')
         if len(name_bytes) > 26:
-            raise ValueError("Payload device name string exceeds single advertising slot bounds.")
+            raise ValueError("Device name string exceeds standard advertising slot bounds (max 26 bytes).")
             
         flags = [0x02, 0x01, 0x06]
-        name_header = [len(name_bytes) + 1, 0x09] # Complete Local Name descriptor type
+        name_header = [len(name_bytes) + 1, 0x09]
         
         payload_data = flags + name_header + list(name_bytes)
         total_len = len(payload_data)
@@ -53,12 +56,12 @@ class BLEBroadcaster:
         self.transport.send_control_packet(packet)
 
     def set_state(self, enable: bool):
-        """Enables or disables active RF transmission states."""
+        """Toggles the controller's radio transmission state."""
         state_byte = [0x01 if enable else 0x00]
         packet = self._build_hci_packet(ocf=0x000A, ogf=self.OGF_LE_CONTROLLER, data=state_byte)
         self.transport.send_control_packet(packet)
 
     def send_keepalive_ping(self):
-        """Sends a standard Read Local Version information command to prevent firmware lockup."""
+        """Dispatches an informational query to maintain active firmware state."""
         packet = self._build_hci_packet(ocf=0x0001, ogf=self.OGF_INFORMATIONAL, data=[])
         self.transport.send_control_packet(packet)

@@ -4,21 +4,26 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "blekeyboard"
-version = "0.0.1"
+version = "0.1.0"
 authors = [
   { name="thewhatdohe" },
   { name="stallspeed" },
 ]
-description = "A cross-platform Python package to emulate a BLE Bluetooth HID keyboard, inspired by the ESP32 library (bleKeyboard)."
+description = "A Python package to emulate a BLE Bluetooth HID keyboard over raw USB pipelines, inspired by the ESP32 library (bleKeyboard)."
 readme = "README.md"
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
+    "Operating System :: Microsoft :: Windows",
 ]
 dependencies = [
-    "winsdk",
+    "pyusb>=1.2.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
 ]
 
 [tool.setuptools.packages.find]
